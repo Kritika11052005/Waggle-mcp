@@ -246,16 +246,27 @@ Corpus: 18 nodes, 18 queries — 6 easy (direct paraphrase) and 12 hard (adversa
 
 *The retrieval accuracy table above measures Waggle's standalone search quality. The comparison below uses a separate multi-session corpus designed to test token efficiency against a chunked-vector baseline.*
 
-Corpus: 24 multi-session scenarios, 50 retrieval queries (`benchmarks/fixtures/comparative_eval.json`).
+Corpus: 24 multi-session scenarios, 66 retrieval queries across 7 task families (`benchmarks/fixtures/comparative_eval.json`).
 
-| System | Mean tokens | Median tokens | p95 tokens | Hit@k |
-|--------|-------------|---------------|------------|-------|
-| **Waggle** | **37.6** | **38.0** | **42.0** | 88% |
-| Naive chunked-vector RAG | 152.1 | 154.0 | 163.0 | 100% |
+| Task family | Queries | Waggle Hit@k | RAG Hit@k |
+|-------------|---------|-------------|----------|
+| `factual_recall` | 18 | 100% | 100% |
+| `temporal_original` | 19 | 89% | 100% |
+| `multi_session_change` | 11 | 91% | 100% |
+| `cross_scenario_synthesis` | 8 | 100% | 100% |
+| `decision_delta` | 4 | 100% | 100% |
+| `adversarial_paraphrase` | 4 | 50% | 100% |
+| `temporal_latest` | 2 | 50% | 100% |
+| **Overall** | **66** | **91%** | **100%** |
+
+| System | Mean tokens | Median tokens | p95 tokens | Hit@k | Exact support |
+|--------|-------------|---------------|------------|-------|---------------|
+| **Waggle** | **36.9** | **37.0** | **42.0** | 91% | 74% |
+| Naive chunked-vector RAG | 152.8 | 155.0 | 162.8 | 100% | 100% |
 
 **Waggle uses ~4× fewer tokens per retrieval** than the naive chunked baseline on this corpus.
 
-The tradeoff is honest: the chunked baseline achieves 100% Hit@k on this corpus because the corpus is not yet hard enough to stress it. **The token efficiency advantage is real and large; the retrieval superiority claim is not yet supported at this corpus scale.** Corpus hardening is the next evaluation step.
+The tradeoff is honest: the chunked baseline achieves 100% Hit@k on this corpus because at `top_k=5` every fact is retrievable from its own session chunk. The token efficiency advantage is real and reproducible; the retrieval superiority claim requires a harder corpus where facts must be synthesised across sessions without guaranteed chunk coverage. Corpus hardening is ongoing.
 
 ### When extraction fails
 

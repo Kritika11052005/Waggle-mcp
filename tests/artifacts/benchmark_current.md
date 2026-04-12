@@ -1,13 +1,13 @@
 # Waggle Comparative Evaluation
 
 - Scenarios: 24
-- Queries: 50
-- Task families: factual_recall, multi_session_change, temporal_latest, temporal_original
+- Queries: 66
+- Task families: adversarial_paraphrase, cross_scenario_synthesis, decision_delta, factual_recall, multi_session_change, temporal_latest, temporal_original
 
 | System | Hit@k | Exact support | Mean tokens | Median tokens | p95 tokens |
 |--------|-------|---------------|-------------|---------------|------------|
-| waggle | 92% | 88% | 37.2 | 38.0 | 42.0 |
-| rag_naive | 100% | 100% | 152.1 | 154.0 | 163.0 |
+| waggle | 91% | 74% | 36.9 | 37.0 | 42.0 |
+| rag_naive | 100% | 100% | 152.8 | 155.0 | 162.8 |
 
 ## Failure Protocol
 

@@ -51,13 +51,26 @@ Corpus: 18 nodes, 18 queries — 6 easy, 12 adversarial.
 
 ### Comparative pilot (Waggle vs RAG)
 
-Corpus: 24 multi-session scenarios, 50 retrieval/temporal queries.
+Corpus: 24 multi-session scenarios, 66 retrieval queries across 7 task families.
 
 | System | Mean tokens | Median | p95 | Hit@k | Exact support |
 |--------|-------------|--------|-----|-------|---------------|
-| **waggle** | **37.6** | **38.0** | **42.0** | 88% | 82% |
-| rag_naive | 152.1 | 154.0 | 163.0 | 100% | 100% |
+| **waggle** | **36.9** | **37.0** | **42.0** | 91% | 74% |
+| rag_naive | 152.8 | 155.0 | 162.8 | 100% | 100% |
 | rag_tuned | 244.0 | 245.0 | 259.6 | 100% | 100% |
+
+#### Per-family breakdown
+
+| Task family | n | Waggle hit@k | RAG hit@k | Notes |
+|-------------|---|-------------|----------|-------|
+| `factual_recall` | 18 | 100% | 100% | Both systems equal |
+| `temporal_original` | 19 | 89% | 100% | Waggle misses ~2 earliest facts |
+| `multi_session_change` | 11 | 91% | 100% | Waggle occasionally misses one session |
+| `cross_scenario_synthesis` | 8 | 100% | 100% | Waggle returns both; exact support lower (74%) |
+| `decision_delta` | 4 | 100% | 100% | Both find before+after |
+| `adversarial_paraphrase` | 4 | 50% | 100% | **Waggle gap**: indirect queries not matched by graph labels |
+| `temporal_latest` | 2 | 50% | 100% | Small sample; Waggle uncertain on recency |
+
 
 #### About rag_tuned
 
