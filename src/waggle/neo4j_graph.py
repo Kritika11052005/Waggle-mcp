@@ -1003,7 +1003,9 @@ class Neo4jMemoryGraph:
                 result.created_count += 1
             else:
                 result.reused_count += 1
-            result.conflicts.extend(store_result.conflicts)
+            for conflict in store_result.conflicts:
+                if conflict.other_node_id not in {item.other_node_id for item in result.conflicts}:
+                    result.conflicts.append(conflict)
         return result
 
     def graph_diff(self, *, since: str = "24h") -> GraphDiffResult:
@@ -1208,8 +1210,6 @@ class Neo4jMemoryGraph:
             existing_content = normalize_text(existing_node.content)
             if normalized_content == existing_content:
                 return existing_node, "exact_content", 1.0
-            if normalized_label == existing_label:
-                return existing_node, "exact_label", 1.0
 
             existing_embedding = self.embedding_model.embed(existing_node.content)
             similarity = self.embedding_model.cosine_similarity(embedding, existing_embedding)

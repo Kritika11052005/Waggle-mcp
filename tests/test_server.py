@@ -217,6 +217,28 @@ def test_observe_conversation_tool(tmp_path: Path) -> None:
     assert "Conversation Observation" in result.content[0].text
 
 
+def test_observe_conversation_tool_reports_database_conflicts(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    app.handle_tool_call(
+        "observe_conversation",
+        {
+            "user_message": "We chose PostgreSQL over MySQL because MySQL replication has been painful.",
+            "assistant_response": "Understood.",
+        },
+    )
+
+    result = app.handle_tool_call(
+        "observe_conversation",
+        {
+            "user_message": "The team is more familiar with MySQL, so we may switch to MySQL.",
+            "assistant_response": "Understood.",
+        },
+    )
+
+    assert result.isError is False
+    assert result.structuredContent["conflicts"]
+
+
 def test_graph_diff_prime_context_and_topics_tools(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     app.handle_tool_call(

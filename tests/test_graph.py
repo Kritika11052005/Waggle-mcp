@@ -136,7 +136,7 @@ def test_semantic_duplicate_nodes_reuse_existing_entry(tmp_path: Path) -> None:
     assert first.created is True
     assert second.created is False
     assert second.node.id == first.node.id
-    assert second.dedup_reason == "exact_label"
+    assert second.dedup_reason == "same_label_high_similarity"
 
 
 def test_entity_resolution_reuses_acronym_matches(tmp_path: Path) -> None:
@@ -281,6 +281,47 @@ def test_observe_conversation_extracts_nodes(tmp_path: Path) -> None:
     assert "I prefer Python for backend work" in labels
     assert "Can we use FastAPI?" in labels
     assert "src/server.py" in labels
+
+
+def test_observe_conversation_extracts_clean_database_and_auth_facts(tmp_path: Path) -> None:
+    graph = make_graph(tmp_path)
+
+    result = graph.observe_conversation(
+        user_message=(
+            "We chose PostgreSQL over MySQL because MySQL replication has been painful. "
+            "We are using FastAPI for the backend. JWT tokens expire in 15 minutes."
+        ),
+        assistant_response=(
+            "Understood. I'll remember that PostgreSQL was chosen, the reason was MySQL replication pain, "
+            "FastAPI is the backend, and JWT expiry is 15 minutes."
+        ),
+    )
+
+    labels = {node.label for node in result.stored_nodes}
+    assert "Database decision" in labels
+    assert "Backend framework" in labels
+    assert "JWT expiry" in labels
+    assert "MySQL replication has been painful" in labels
+    assert "I'll remember that PostgreSQL was chosen," not in labels
+    assert "FastAPI" not in labels
+
+
+def test_observe_conversation_creates_database_contradiction_edges(tmp_path: Path) -> None:
+    graph = make_graph(tmp_path)
+    graph.observe_conversation(
+        user_message="We chose PostgreSQL over MySQL because MySQL replication has been painful.",
+        assistant_response="Understood.",
+    )
+
+    result = graph.observe_conversation(
+        user_message="The team is more familiar with MySQL, so we may switch to MySQL.",
+        assistant_response="Understood. I'll note that.",
+    )
+
+    assert result.conflicts
+    decision_node = next(node for node in result.stored_nodes if node.label == "Database decision")
+    related = graph.get_related(node_id=decision_node.id, max_depth=1)
+    assert any(edge.relationship == RelationType.CONTRADICTS for edge in related.edges)
 
 
 def test_query_supports_temporal_latest_and_oldest_bias(tmp_path: Path) -> None:

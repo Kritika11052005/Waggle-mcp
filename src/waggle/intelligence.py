@@ -39,8 +39,30 @@ _QUESTION_PREFIX_RE = re.compile(r"^(why|what|how|when|where|who|which|can|could
 _FILE_PATH_RE = re.compile(r"\b(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]+\b|\b[\w.-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|kt|rb|php|md|json|yaml|yml|toml|sql)\b")
 _ENTITY_RE = re.compile(r"\b(?:[A-Z]{2,}[A-Z0-9]*|[A-Z][a-z]+(?:[A-Z][A-Za-z0-9]+)+|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
 _PREFERENCE_RE = re.compile(r"\b(?:i\s+)?(?:prefer|like|love|want|favo(?:u)?r|avoid)\b", re.IGNORECASE)
-_DECISION_RE = re.compile(r"\b(?:let's use|lets use|we should use|go with|we decided|decided to use|choose|chosen|picked)\b", re.IGNORECASE)
+_DECISION_RE = re.compile(
+    r"\b(?:let's use|lets use|we should use|go with|we decided|decided to use|choose|chose|chosen|picked)\b",
+    re.IGNORECASE,
+)
 _NEGATION_RE = re.compile(r"\b(?:avoid|not|don't|dont|won't|wont|no longer)\b", re.IGNORECASE)
+_SWITCH_RE = re.compile(r"\b(?:switch(?:ing)?|move(?:ing)?|migrate(?:ing)?|reconsider(?:ing)?|pivot(?:ing)?)\b", re.IGNORECASE)
+_ASSISTANT_MEMORY_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:understood|got it|okay|ok|sure)[,\s.-]+)?(?:i(?:'ll| will)\s+)?"
+    r"(?:remember|note|store|track|keep(?:\s+in\s+mind)?)(?:\s+that)?\s+",
+    re.IGNORECASE,
+)
+_LEADING_ACK_RE = re.compile(r"^\s*(?:understood|got it|okay|ok|sure)[,\s.-]+", re.IGNORECASE)
+_BACKEND_RE = re.compile(
+    r"\b(?:using|use|uses|built with|build with)\s+(?P<tech>[A-Za-z][A-Za-z0-9.+-]*)\s+for\s+(?:the\s+)?backend\b"
+    r"|\b(?P<tech_is>[A-Za-z][A-Za-z0-9.+-]*)\s+is\s+(?:the\s+)?backend\b",
+    re.IGNORECASE,
+)
+_JWT_EXPIRY_RE = re.compile(
+    r"\bjwt\b.*?\b(?:expire|expires|expiry|ttl)\b.*?\b(?P<duration>\d+\s+(?:seconds?|minutes?|hours?|days?))\b",
+    re.IGNORECASE,
+)
+_REQUIREMENT_RE = re.compile(r"\b(?:need|needs|must have|require|requires)\s+(?P<item>[^.?!]+)", re.IGNORECASE)
+_TODO_RE = re.compile(r"^(?:todo:?|to do:?|add)\s+(?P<item>[^.?!]+)", re.IGNORECASE)
+_BECAUSE_SPLIT_RE = re.compile(r"\bbecause\b", re.IGNORECASE)
 
 _ACTION_TOKENS = {
     "prefer",
@@ -59,6 +81,7 @@ _ACTION_TOKENS = {
     "using",
     "used",
     "choose",
+    "chose",
     "chosen",
     "pick",
     "picked",
@@ -502,7 +525,33 @@ def extract_conversation_candidates(
 
     for speaker, text in combined:
         sentences = split_atomic_items(text)
-        for sentence in sentences:
+        for raw_sentence in sentences:
+            sentence = _normalize_observed_sentence(raw_sentence, speaker=speaker)
+            if not sentence:
+                continue
+
+            structured_candidates = _extract_structured_observation_candidates(sentence, speaker=speaker)
+            if structured_candidates:
+                for candidate in structured_candidates:
+                    _append_candidate(
+                        candidates,
+                        seen,
+                        label=str(candidate["label"]),
+                        content=str(candidate["content"]),
+                        node_type=candidate["node_type"],
+                        tags=list(candidate["tags"]),
+                    )
+                for path in _FILE_PATH_RE.findall(sentence):
+                    _append_candidate(
+                        candidates,
+                        seen,
+                        label=path,
+                        content=f"Code path mentioned in conversation: {path}",
+                        node_type=NodeType.ENTITY,
+                        tags=["observed", "code-path", f"speaker:{speaker}"],
+                    )
+                continue
+
             node_type = _infer_observed_node_type(sentence)
             if node_type is not None:
                 label = sentence.strip() if node_type == NodeType.QUESTION else infer_label(sentence)
@@ -515,15 +564,16 @@ def extract_conversation_candidates(
                     tags=["observed", f"speaker:{speaker}"],
                 )
 
-            for entity in extract_named_entities(sentence):
-                _append_candidate(
-                    candidates,
-                    seen,
-                    label=entity,
-                    content=entity,
-                    node_type=NodeType.ENTITY,
-                    tags=["observed", "named-entity", f"speaker:{speaker}"],
-                )
+            if node_type is None:
+                for entity in extract_named_entities(sentence):
+                    _append_candidate(
+                        candidates,
+                        seen,
+                        label=entity,
+                        content=entity,
+                        node_type=NodeType.ENTITY,
+                        tags=["observed", "named-entity", f"speaker:{speaker}"],
+                    )
 
             for path in _FILE_PATH_RE.findall(sentence):
                 _append_candidate(
@@ -601,7 +651,7 @@ def extract_focus_tokens(text: str) -> set[str]:
     lowered = normalize_text(text)
     patterns = (
         r"(?:prefer|prefers|like|likes|love|loves|want|wants|avoid|avoids)\s+(?P<focus>.+)",
-        r"(?:lets use|let's use|use|using|go with|choose|chosen|picked|decided to use)\s+(?P<focus>.+)",
+        r"(?:lets use|let's use|use|using|go with|choose|chose|chosen|picked|decided to use|switch to|move to|migrate to)\s+(?P<focus>.+)",
     )
     for pattern in patterns:
         match = re.search(pattern, lowered)
@@ -623,12 +673,118 @@ def _infer_observed_node_type(text: str) -> NodeType | None:
         return NodeType.QUESTION
     if _PREFERENCE_RE.search(stripped):
         return NodeType.PREFERENCE
-    if _DECISION_RE.search(stripped):
+    if _DECISION_RE.search(stripped) or _SWITCH_RE.search(stripped):
         return NodeType.DECISION
+    if _JWT_EXPIRY_RE.search(stripped):
+        return NodeType.FACT
+    if _BACKEND_RE.search(stripped):
+        return NodeType.FACT
+    if _REQUIREMENT_RE.search(stripped):
+        return NodeType.CONCEPT
+    if _TODO_RE.search(stripped):
+        return NodeType.NOTE
     entity_matches = extract_named_entities(stripped)
     if entity_matches or _FILE_PATH_RE.search(stripped):
         return NodeType.ENTITY
     return None
+
+
+def _normalize_observed_sentence(text: str, *, speaker: str) -> str:
+    cleaned = _LEADING_ACK_RE.sub("", text.strip())
+    if speaker == "assistant" and _ASSISTANT_MEMORY_PREFIX_RE.match(text.strip()):
+        return ""
+    return cleaned.strip()
+
+
+def _extract_structured_observation_candidates(sentence: str, *, speaker: str) -> list[dict[str, object]]:
+    tags = ["observed", f"speaker:{speaker}"]
+    candidates: list[dict[str, object]] = []
+
+    backend_match = _BACKEND_RE.search(sentence)
+    if backend_match:
+        tech = backend_match.group("tech") or backend_match.group("tech_is")
+        if tech:
+            candidates.append(
+                {
+                    "label": "Backend framework",
+                    "content": f"We are using {tech} for the backend.",
+                    "node_type": NodeType.FACT,
+                    "tags": [*tags, "backend-framework"],
+                }
+            )
+
+    jwt_match = _JWT_EXPIRY_RE.search(sentence)
+    if jwt_match:
+        duration = jwt_match.group("duration")
+        candidates.append(
+            {
+                "label": "JWT expiry",
+                "content": f"JWT tokens expire in {duration}.",
+                "node_type": NodeType.FACT,
+                "tags": [*tags, "auth"],
+            }
+        )
+
+    todo_match = _TODO_RE.search(sentence)
+    if todo_match:
+        item = todo_match.group("item").strip().rstrip(".")
+        candidates.append(
+            {
+                "label": infer_label(item),
+                "content": f"TODO: {item}.",
+                "node_type": NodeType.NOTE,
+                "tags": [*tags, "todo"],
+            }
+        )
+
+    requirement_match = _REQUIREMENT_RE.search(sentence)
+    if requirement_match and not sentence.endswith("?"):
+        item = requirement_match.group("item").strip().rstrip(".")
+        candidates.append(
+            {
+                "label": infer_label(item),
+                "content": f"We need {item}.",
+                "node_type": NodeType.CONCEPT,
+                "tags": [*tags, "requirement"],
+            }
+        )
+
+    choice = extract_choice_entity(sentence)
+    if choice is not None and (_DECISION_RE.search(sentence) or _SWITCH_RE.search(sentence)):
+        entity_token, category = choice
+        label = {
+            "database": "Database decision",
+            "backend-framework": "Backend framework decision",
+            "frontend-framework": "Frontend framework decision",
+            "auth-mechanism": "Auth decision",
+        }.get(category, infer_label(sentence))
+        decision_content = sentence.strip()
+        if not decision_content.endswith("."):
+            decision_content = f"{decision_content}."
+        candidates.append(
+            {
+                "label": label,
+                "content": decision_content,
+                "node_type": NodeType.DECISION,
+                "tags": [*tags, category, f"choice:{entity_token}"],
+            }
+        )
+
+        reason_parts = _BECAUSE_SPLIT_RE.split(sentence, maxsplit=1)
+        if len(reason_parts) == 2:
+            reason = reason_parts[1].strip().rstrip(".")
+            if reason:
+                normalized_reason = reason[0].upper() + reason[1:]
+                candidates.append(
+                    {
+                        "label": infer_label(reason),
+                        "content": f"{normalized_reason}.",
+                        "node_type": NodeType.FACT,
+                        "tags": [*tags, "decision-rationale", category],
+                    }
+                )
+
+    return candidates
 
 
 def _append_candidate(

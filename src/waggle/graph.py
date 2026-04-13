@@ -989,7 +989,9 @@ class MemoryGraph:
                 result.created_count += 1
             else:
                 result.reused_count += 1
-            result.conflicts.extend(store_result.conflicts)
+            for conflict in store_result.conflicts:
+                if conflict.other_node_id not in {item.other_node_id for item in result.conflicts}:
+                    result.conflicts.append(conflict)
         return result
 
     def graph_diff(self, *, since: str = "24h") -> GraphDiffResult:
@@ -1178,8 +1180,6 @@ class MemoryGraph:
 
             if normalized_content == existing_content:
                 return existing_node, "exact_content", 1.0
-            if normalized_label == existing_label:
-                return existing_node, "exact_label", 1.0
 
             # ── Layer 2: substring containment (cheap, catches rephrased subsets)
             if len(normalized_content) >= 10 and len(existing_content) >= 10:
