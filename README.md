@@ -28,7 +28,7 @@
 
 ---
 
-## What's New — v0.1.8
+## What's New — v0.1.9
 
 - **Rollover transcript handoff CLI**: `waggle-mcp ingest-transcript-handoff` ingests full ordered transcripts, deduplicates them with `message_identity`, and exports a session-scoped handoff bundle for the next window or IDE.
 - **Cross-run completion fixes**: append-only reruns now avoid reprocessing already completed turns while still completing a previously trailing `user` block when the matching `assistant` arrives later.
@@ -472,7 +472,7 @@ LongMemEval session-retrieval results (500 questions):
 
 `Exact@5` is stricter than R@5 and is included here to show precision on support-session retrieval, not just any top-5 hit.
 
-**Important:** on the current saved artifacts, raw retrieval outperforms hybrid reranking on both R@5 and Exact@5. We are treating this as a tuning target for `v0.1.8` rather than changing defaults to a weaker mode.
+**Important:** on the current saved artifacts, raw retrieval outperforms hybrid reranking on both R@5 and Exact@5. We are treating this as a tuning target for `v0.1.9` rather than changing defaults to a weaker mode.
 
 ### Benchmark Policy
 
