@@ -34,8 +34,12 @@ That demo exercises the full MCP surface: graph ingestion, retrieval, conflict h
 
 ## Recent Additions
 
-- **Graph Studio refresh:** the local `/graph` editor now has collapsible side panels, focus mode, label toggling, connected/isolate/cluster stats, and a layout that handles sparse graphs better instead of dropping everything into a giant ring.
+- **Graph Studio refresh:** the local `/graph` editor now has dual-layer graph/conversation views, transcript provenance, retrieval inspection, collapsible side panels, focus mode, label toggling, connected/isolate/cluster stats, and a layout that handles sparse graphs better instead of dropping everything into a giant ring.
 - **Broader retrieval:** the new `aggregate_graph` MCP tool returns a wide filtered subgraph for map-reduce style analysis, with optional `node_types`, `tags`, and scope filters.
+- **Hybrid memory retrieval:** Waggle now supports graph, verbatim transcript, and hybrid retrieval modes. The no-rerank hybrid path is the current default because it fixes the original cross-session verbatim recall gap without shipping the rerank regression.
+- **Deterministic `.abhi` v2 export:** unsigned, unencrypted `.abhi` exports are now byte-identical across repeated exports and export → import → export round-trips, with canonical hashing and signature support tied to `content_hash`.
+- **Safer sharing workflow:** `waggle-mcp push` now encrypts `.abhi` exports by default, and export paths refuse to proceed when transcript text appears to contain likely secrets unless you explicitly pass `--force`.
+- **Model migration repair:** `waggle-mcp doctor --fix` now acts as the supported re-embedding path when `WAGGLE_MODEL` changes on an existing DB.
 - **OOLONG evaluation workflow:** `waggle-mcp benchmark-oolong ...` runs retrieval-only, one-shot retrieval+LLM, or Waggle-backed RLM evaluation against OOLONG datasets and can emit JSON reports for offline analysis.
 - **Vendored upstream RLM package:** the repo now includes the upstream `alexzhang13/rlm` Python package under [`src/rlm`](./src/rlm/) with attribution material in [`third_party/rlm`](./third_party/rlm/).
 
@@ -98,6 +102,8 @@ waggle-mcp doctor
 Running `setup --yes` detects local MCP clients, writes the necessary configuration, and initializes your local database directory. Restart your client, and you're ready to go. Use `waggle-mcp init` if you prefer the older interactive wizard.
 
 `waggle-mcp doctor` is your first stop if anything doesn't work — it checks config file locations, the embedding model cache, DB path, and surfaces the most common API mistakes.
+
+If you change `WAGGLE_MODEL` for an existing shared DB, run `waggle-mcp doctor` immediately afterward. If it reports mixed embedding model IDs, run `waggle-mcp doctor --fix` to re-embed stale transcript and node rows to the current model before continuing.
 
 > **Windows users:** Run all commands with `python -X utf8` or set `PYTHONUTF8=1` in your environment to avoid `UnicodeEncodeError` from emoji in log output.
 
@@ -433,10 +439,15 @@ waggle-mcp edit-graph
 Graph Studio currently supports:
 
 - Direct node and edge editing in the browser
+- Conversation-layer and graph-layer views in the same UI
+- Transcript provenance and retrieval-debug inspection for hybrid memory results
 - Mouse-based node dragging and shift-drag edge creation
 - Collapsible side panels, focus mode, and label toggling for large graphs
 - Live graph stats including connected nodes, isolates, and cluster count
-- Export/import of the current graph, including `.abhi` sharing workflows
+- Export/import of the current graph, including `.abhi` preview, diff, and sharing workflows
+- `.abhi` is JSON underneath, supports optional embedded vectors, optional AES-256-GCM encryption, deterministic content hashing, and Google Drive sync via `waggle-mcp push|pull|share` (see [docs/abhi-format.md](/Users/abhigyanshekhar/Desktop/MCP/docs/abhi-format.md))
+
+Security note: `waggle-mcp push` now encrypts exported `.abhi` files by default, and export paths refuse to proceed if transcript text appears to contain likely secrets unless you pass `--force`. The full threat model is in [SECURITY.md](/Users/abhigyanshekhar/Desktop/MCP/SECURITY.md).
 
 Use this when you want to inspect the live memory graph visually, clean up relationships, or export a portable memory artifact for another Waggle instance.
 
@@ -551,6 +562,10 @@ Your conversation memory only leaves your machine if you explicitly configure a 
 
 Waggle currently stores local memory as a normal SQLite file and does not add application-level encryption at rest. Use standard filesystem permissions and OS disk encryption if the stored conversation history is sensitive.
 
+Before `.abhi` export or sharing workflows, Waggle now scans transcript text for likely secrets such as API keys, passwords, and JWTs. If it finds probable secrets, export is refused unless you pass `--force`. For remote sharing, `waggle-mcp push` defaults to encrypted export.
+
+The current threat model and sharing guidance are documented in [SECURITY.md](./SECURITY.md).
+
 ---
 
 ## Graph Data Model
@@ -572,6 +587,7 @@ Waggle currently uses a local `sentence-transformers` embedding model selected b
 - Default: `all-MiniLM-L6-v2`
 - Any locally available `sentence-transformers` model name can be used.
 - If the selected model is unavailable locally, Waggle falls back to deterministic embeddings for portability.
+- For existing DBs, model changes are a migration event: run `waggle-mcp doctor`, then `waggle-mcp doctor --fix` if mixed `embedding_model_id` values are reported.
 
 Set model in env:
 
@@ -598,6 +614,7 @@ Set model in MCP client config (example):
 Notes:
 - Waggle does not currently route to hosted embedding providers directly; embedding inference is local to the runtime.
 - Deterministic mode is useful for offline/testing portability, but semantic retrieval quality is lower than transformer mode.
+- For a shared DB migration after changing `WAGGLE_MODEL`, run `waggle-mcp doctor`; if stale rows are reported, run `waggle-mcp doctor --fix` and let the re-embed pass complete before resuming normal use.
 
 ---
 
@@ -629,6 +646,8 @@ Detailed artifacts and methodology live in:
 - **Best on structured recall, weaker on answer synthesis**: Waggle is strongest at "retrieve the right facts and relationships" — not at emitting a single benchmark-formatted final answer from memory.
 - **Edges are load-bearing**: `observe_conversation` and `decompose_and_store` create them automatically. Raw `store_node` calls without follow-up edges produce disconnected nodes with no traversal value.
 - **Graph retrieval trades tokens for reasoning context**: factual lookups are often cheaper than chunked RAG; graph-expansion queries intentionally spend more tokens to carry update chains and contradictions.
+- **Graph-only recall still depends on extraction**: the cross-session codeword guarantee is fixed by the verbatim and hybrid layers; graph-only mode can still miss facts if extraction produced zero nodes for the original turn.
+- **Hybrid rerank is not the default**: the shipped no-rerank hybrid path is stronger right now. The rerank path remains available for follow-up tuning, but it is intentionally not the launch default.
 - **Deduplication is fixture-backed, not universal semantic equivalence**: the current 32-case fixture covers common memory-node paraphrases and false friends, but broader production text can still require additional aliases or stricter domain guards.
 
 For operational details, scaling considerations, tool-level behavior, and the full MCP feature surface, see [docs/reference.md](./docs/reference.md).
