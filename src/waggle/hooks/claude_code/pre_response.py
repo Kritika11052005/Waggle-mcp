@@ -3,7 +3,11 @@
 Waggle Claude Code hook: UserPromptSubmit (pre-response).
 
 Triggered before Claude responds to a user prompt.
-Calls prime_context or query_graph to inject relevant memory context.
+
+Routing logic:
+  - Concrete task / question  → build_context (recursive context assembly)
+  - Session start / no query  → prime_context
+  - Any failure               → fallback to query_graph, then silent exit
 
 Protocol: reads JSON from stdin, writes JSON to stdout.
 Always exits 0 — never blocks the user's session.
@@ -13,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import sys
 from pathlib import Path
@@ -30,6 +35,14 @@ for _candidate in [
 
 _TIMEOUT_SECONDS = 5
 
+# Heuristic: prompts that look like concrete tasks benefit from build_context
+_TASK_PATTERN = re.compile(
+    r"\b(build|implement|continue|finish|fix|debug|add|create|update|deploy|"
+    r"explain|how|what|why|where|when|show|list|find|get|run|test|review|"
+    r"refactor|optimize|help|write|generate|analyse|analyze)\b",
+    re.IGNORECASE,
+)
+
 
 def _timeout_handler(signum: int, frame: Any) -> None:  # noqa: ANN001
     raise TimeoutError("Waggle pre_response hook timed out")
@@ -39,6 +52,11 @@ def _silent_exit() -> None:
     """Exit 0 with empty output — never block the user."""
     print(json.dumps({}))
     sys.exit(0)
+
+
+def _is_concrete_task(prompt: str) -> bool:
+    """Return True if the prompt looks like a concrete task or question."""
+    return bool(_TASK_PATTERN.search(prompt)) and len(prompt.split()) >= 3
 
 
 def main() -> None:
@@ -63,6 +81,7 @@ def main() -> None:
         from waggle.config import AppConfig
         from waggle.embeddings import EmbeddingModel
         from waggle.graph import MemoryGraph
+        from waggle.recursive_context import RecursiveContextController, RECURSIVE_CONTEXT_ENABLED
 
         config = AppConfig.from_env()
         if config.backend != "sqlite":
@@ -74,13 +93,33 @@ def main() -> None:
             tenant_id=config.default_tenant_id,
         )
 
-        # Try prime_context first (session start), fall back to query_graph
-        try:
-            result = graph.prime_context(session_id=session_id)
-            context_text = result.summary if result.summary else ""
-        except Exception:
-            context_text = ""
+        context_text = ""
 
+        # Route: concrete task → build_context; session start → prime_context
+        if RECURSIVE_CONTEXT_ENABLED and _is_concrete_task(prompt):
+            try:
+                controller = RecursiveContextController(graph=graph)
+                ctx_result = controller.build_context(
+                    query=prompt[:500],
+                    session_id=session_id,
+                    token_budget=800,
+                    depth=1,
+                    max_subqueries=4,
+                    mode="fast",
+                )
+                context_text = ctx_result.context_pack or ""
+            except Exception:
+                context_text = ""
+
+        # Fallback 1: prime_context
+        if not context_text:
+            try:
+                result = graph.prime_context(session_id=session_id)
+                context_text = result.summary if result.summary else ""
+            except Exception:
+                context_text = ""
+
+        # Fallback 2: query_graph
         if not context_text:
             try:
                 qr = graph.query(query=prompt[:500], max_nodes=8, max_depth=1)
@@ -93,7 +132,6 @@ def main() -> None:
                 context_text = ""
 
         if context_text:
-            # Inject context as a system reminder
             print(json.dumps({
                 "type": "system_reminder",
                 "content": f"[Waggle memory context]\n{context_text}",

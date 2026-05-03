@@ -76,10 +76,75 @@ MCP Client (Claude / Codex / Gemini CLI / Cursor / Antigravity / ChatGPT)
     ↓
 waggle.server  — MCP tool surface
     ↓
+RecursiveContextController  — RLM-inspired context assembly (build_context)
+    ↓
 Graph Engine  — MemoryGraph (SQLite) or Neo4jMemoryGraph
     ↓
 Embeddings  — sentence-transformers (local) or deterministic fallback
 ```
+
+---
+
+## Recursive Context Assembly
+
+Waggle stores memory outside the model context window. Instead of pasting long context into every prompt, agents call `build_context` to get a compact, high-signal context pack assembled from the graph.
+
+Inspired by [Recursive Language Models](https://github.com/alexzhang13/rlm) — the idea of externalising long context into an environment and interacting with it through decomposition and targeted retrieval.
+
+**How it works:**
+
+1. **Decompose** — the query is split into targeted subqueries (decisions, constraints, implementation details, unfinished work, conflicts)
+2. **Retrieve** — each subquery runs against graph, hybrid, and verbatim transcript retrieval
+3. **Expand** — the graph is traversed around top nodes via typed edges (`updates`, `contradicts`, `depends_on`, `derived_from`)
+4. **Resolve** — update chains and contradictions are detected; superseded nodes are flagged
+5. **Deduplicate & rank** — overlapping hits are merged; high-signal node types (decisions, preferences) are boosted
+6. **Compress** — everything is packed into a structured context brief under a configurable token budget
+
+**Example MCP call:**
+
+```json
+{
+  "tool": "build_context",
+  "arguments": {
+    "query": "Continue implementing Waggle from where we left off",
+    "project": "waggle-mcp",
+    "token_budget": 1000,
+    "depth": 2
+  }
+}
+```
+
+**Example output:**
+
+```
+### Waggle Recursive Context Pack
+Task: Continue implementing Waggle from where we left off
+
+Current relevant decisions:
+- [decision] Use SQLite for local storage: We chose SQLite with WAL mode for local-first deployments.
+- [decision] Hybrid retrieval default: Hybrid (vector + BM25 + graph) is the default retrieval mode.
+
+Active constraints:
+- [preference] No external LLM APIs required: All retrieval must work fully local.
+
+Important implementation context:
+- [fact] RecursiveContextController added: New module waggle/recursive_context.py implements build_context.
+
+Conflicts or superseded context:
+- Possible conflict: 'Use Flask' contradicts 'Use FastAPI'
+```
+
+**Config env vars:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `WAGGLE_RECURSIVE_CONTEXT_ENABLED` | `true` | Enable/disable the feature |
+| `WAGGLE_RECURSIVE_CONTEXT_DEFAULT_BUDGET` | `1200` | Default token budget |
+| `WAGGLE_RECURSIVE_CONTEXT_MAX_SUBQUERIES` | `6` | Max decomposed subqueries |
+| `WAGGLE_RECURSIVE_CONTEXT_DEFAULT_DEPTH` | `2` | Graph expansion depth |
+| `WAGGLE_RECURSIVE_CONTEXT_INCLUDE_EVIDENCE` | `true` | Include transcript evidence |
+
+**Tool aliases:** `recursive_context`, `assemble_context`, `rlm_context` all resolve to `build_context`.
 
 ---
 

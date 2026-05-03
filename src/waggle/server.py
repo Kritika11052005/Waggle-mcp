@@ -86,6 +86,11 @@ from waggle.models import (
 )
 from waggle.rate_limit import RateLimiter
 from waggle.runtime_context import runtime_context
+from waggle.recursive_context import (
+    RecursiveContextController,
+    RecursiveContextResult,
+    RECURSIVE_CONTEXT_ENABLED,
+)
 from waggle.serializer import (
     serialize_abhi_chunk_load,
     serialize_abhi_inspect,
@@ -182,6 +187,10 @@ _TOOL_ALIASES: dict[str, tuple[str, dict[str, object]]] = {
     "validate_abhi":        ("fsck",   {}),
     "inspect_abhi":         ("show",   {}),
     "query_abhi":           ("grep",   {}),
+    # Recursive context assembly aliases
+    "recursive_context":    ("build_context", {}),
+    "assemble_context":     ("build_context", {}),
+    "rlm_context":          ("build_context", {}),
 }
 
 _EXPORT_SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -1226,6 +1235,60 @@ class WaggleServer:
                     }
                 ),
             ),
+            types.Tool(
+                name="build_context",
+                description=(
+                    "Recursively retrieves and compresses relevant Waggle memory for the current task, "
+                    "using graph, hybrid, transcript, update, and conflict-aware retrieval. "
+                    "Decomposes the query into targeted subqueries, expands the graph around key nodes, "
+                    "resolves contradictions and superseded memories, and returns a compact context pack "
+                    "under a configurable token budget. "
+                    "Aliases: recursive_context, assemble_context, rlm_context."
+                ),
+                inputSchema=_object_input_schema(
+                    {
+                        "query": {
+                            "type": "string",
+                            "description": "Current user task or question to build context for.",
+                        },
+                        **_scope_properties(),
+                        "token_budget": {
+                            "type": "integer",
+                            "default": 1200,
+                            "description": "Maximum token budget for the context pack (approximate).",
+                        },
+                        "depth": {
+                            "type": "integer",
+                            "default": 2,
+                            "minimum": 0,
+                            "description": "Graph expansion depth around retrieved nodes.",
+                        },
+                        "max_subqueries": {
+                            "type": "integer",
+                            "default": 6,
+                            "minimum": 1,
+                            "description": "Maximum number of decomposed subqueries to run.",
+                        },
+                        "include_evidence": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": "Whether to include verbatim transcript evidence in the context pack.",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["fast", "balanced", "deep"],
+                            "default": "balanced",
+                            "description": (
+                                "Retrieval depth mode: "
+                                "'fast' runs fewer subqueries for low latency; "
+                                "'balanced' is the default; "
+                                "'deep' adds extra subqueries for thorough coverage."
+                            ),
+                        },
+                    },
+                    required=["query"],
+                ),
+            ),
         ]
 
     def build_prompts(self) -> list[types.Prompt]:
@@ -1972,6 +2035,34 @@ class WaggleServer:
                             f"  {rel}: count={stats['count']} avg_confidence={stats['avg_confidence']:.3f}"
                         )
                     result = self._tool_result("\n".join(lines), report)
+                elif name == "build_context":
+                    controller = RecursiveContextController(graph=graph)
+                    ctx_result = controller.build_context(
+                        query=arguments["query"],
+                        agent_id=arguments.get("agent_id", ""),
+                        project=arguments.get("project", ""),
+                        session_id=arguments.get("session_id", ""),
+                        context_window_id=arguments.get("context_window_id"),
+                        token_budget=int(arguments.get("token_budget", 1200)),
+                        depth=int(arguments.get("depth", 2)),
+                        max_subqueries=int(arguments.get("max_subqueries", 6)),
+                        include_evidence=bool(arguments.get("include_evidence", True)),
+                        mode=arguments.get("mode", "balanced"),
+                    )
+                    payload = {
+                        "context_pack": ctx_result.context_pack,
+                        "subqueries": [sq.model_dump() for sq in ctx_result.subqueries],
+                        "nodes_used": [self._node_payload(n) for n in ctx_result.nodes_used],
+                        "edges_used": [self._edge_payload(e) for e in ctx_result.edges_used],
+                        "transcript_evidence": [
+                            (t.model_dump() if hasattr(t, "model_dump") else str(t))
+                            for t in ctx_result.transcript_evidence
+                        ],
+                        "conflicts": ctx_result.conflicts,
+                        "token_estimate": ctx_result.token_estimate,
+                        "debug": ctx_result.debug,
+                    }
+                    result = self._tool_result(ctx_result.context_pack, payload)
                 else:
                     raise ValidationFailure(f"Unknown tool: {name}")
 
