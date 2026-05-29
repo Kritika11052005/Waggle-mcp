@@ -1030,6 +1030,11 @@ class WaggleServer:
                             "default": False,
                             "description": "Must be true to perform the destructive clear operation.",
                         },
+                        "dry_run": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Preview the clear operation without deleting data.",
+                        },
                     },
                     required=["session_id"],
                 ),
@@ -1048,6 +1053,11 @@ class WaggleServer:
                             "default": False,
                             "description": "Must be true to perform the destructive clear operation.",
                         },
+                        "dry_run": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Preview the clear operation without deleting data.",
+                        },
                     },
                     required=["project"],
                 ),
@@ -1064,6 +1074,11 @@ class WaggleServer:
                             "type": "boolean",
                             "default": False,
                             "description": "Must be true to perform the destructive clear operation.",
+                        },
+                        "dry_run": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Preview the clear operation without deleting data.",
                         },
                     }
                 ),
@@ -1977,26 +1992,38 @@ class WaggleServer:
                         {"id": node.id, "label": node.label, "tenant_id": node.tenant_id},
                     )
                 elif name == "clear_session":
-                    self._require_clear_confirmation(arguments, "clear_session")
-                    cleared = graph.clear_session(session_id=arguments["session_id"])
+                    dry_run = bool(arguments.get("dry_run", False))
+                    if not dry_run:
+                        self._require_clear_confirmation(arguments, "clear_session")
+                    cleared = graph.clear_session(session_id=arguments["session_id"], dry_run=dry_run)
+                    prefix = "[Preview] Would clear" if dry_run else "Cleared"
+                    verb = "Would delete" if dry_run else "Deleted"
                     result = self._tool_result(
-                        f"Cleared session '{cleared.session_id}'. Deleted {cleared.deleted_nodes} node(s), "
+                        f"{prefix} session '{cleared.session_id}'. {verb} {cleared.deleted_nodes} node(s), "
                         f"{cleared.deleted_edges} edge(s), and {cleared.deleted_transcripts} transcript record(s).",
                         self._clear_scope_payload(cleared),
                     )
                 elif name == "clear_project":
-                    self._require_clear_confirmation(arguments, "clear_project")
-                    cleared = graph.clear_project(project=arguments["project"])
+                    dry_run = bool(arguments.get("dry_run", False))
+                    if not dry_run:
+                        self._require_clear_confirmation(arguments, "clear_project")
+                    cleared = graph.clear_project(project=arguments["project"], dry_run=dry_run)
+                    prefix = "[Preview] Would clear" if dry_run else "Cleared"
+                    verb = "Would delete" if dry_run else "Deleted"
                     result = self._tool_result(
-                        f"Cleared project '{cleared.project}'. Deleted {cleared.deleted_nodes} node(s), "
+                        f"{prefix} project '{cleared.project}'. {verb} {cleared.deleted_nodes} node(s), "
                         f"{cleared.deleted_edges} edge(s), and {cleared.deleted_transcripts} transcript record(s).",
                         self._clear_scope_payload(cleared),
                     )
                 elif name == "clear_all":
-                    self._require_clear_confirmation(arguments, "clear_all")
-                    cleared = graph.clear_all()
+                    dry_run = bool(arguments.get("dry_run", False))
+                    if not dry_run:
+                        self._require_clear_confirmation(arguments, "clear_all")
+                    cleared = graph.clear_all(dry_run=dry_run)
+                    prefix = "[Preview] Would clear" if dry_run else "Cleared"
+                    verb = "Would delete" if dry_run else "Deleted"
                     result = self._tool_result(
-                        f"Cleared all graph memory data for tenant '{graph.tenant_id}'. Deleted {cleared.deleted_nodes} node(s), "
+                        f"{prefix} all graph memory data for tenant '{graph.tenant_id}'. {verb} {cleared.deleted_nodes} node(s), "
                         f"{cleared.deleted_edges} edge(s), and {cleared.deleted_transcripts} transcript record(s).",
                         self._clear_scope_payload(cleared),
                     )
@@ -4154,6 +4181,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     clear_session.add_argument("--session-id", required=True)
     clear_session.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
+    clear_session.add_argument("--dry-run", action="store_true", help="Preview the clear operation without deleting data.")
 
     clear_project = subparsers.add_parser(
         "clear-project",
@@ -4161,12 +4189,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     clear_project.add_argument("--project", required=True)
     clear_project.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
+    clear_project.add_argument("--dry-run", action="store_true", help="Preview the clear operation without deleting data.")
 
     clear_all = subparsers.add_parser(
         "clear-all",
         help="Delete all graph memory data for the current tenant.",
     )
     clear_all.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
+    clear_all.add_argument("--dry-run", action="store_true", help="Preview the clear operation without deleting data.")
 
     import_abhi = subparsers.add_parser(
         "import",
@@ -4731,21 +4761,24 @@ def _run_admin_command(config: AppConfig, args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0
     if args.command == "clear-session":
-        if not bool(getattr(args, "yes", False)):
+        dry_run = bool(getattr(args, "dry_run", False))
+        if not dry_run and not bool(getattr(args, "yes", False)):
             raise ValidationFailure("clear-session is destructive and requires --yes.")
-        cleared = backend.clear_session(session_id=args.session_id)
+        cleared = backend.clear_session(session_id=args.session_id, dry_run=dry_run)
         print(json.dumps(cleared.model_dump(mode="json"), indent=2))
         return 0
     if args.command == "clear-project":
-        if not bool(getattr(args, "yes", False)):
+        dry_run = bool(getattr(args, "dry_run", False))
+        if not dry_run and not bool(getattr(args, "yes", False)):
             raise ValidationFailure("clear-project is destructive and requires --yes.")
-        cleared = backend.clear_project(project=args.project)
+        cleared = backend.clear_project(project=args.project, dry_run=dry_run)
         print(json.dumps(cleared.model_dump(mode="json"), indent=2))
         return 0
     if args.command == "clear-all":
-        if not bool(getattr(args, "yes", False)):
+        dry_run = bool(getattr(args, "dry_run", False))
+        if not dry_run and not bool(getattr(args, "yes", False)):
             raise ValidationFailure("clear-all is destructive and requires --yes.")
-        cleared = backend.clear_all()
+        cleared = backend.clear_all(dry_run=dry_run)
         print(json.dumps(cleared.model_dump(mode="json"), indent=2))
         return 0
     if args.command == "import":
@@ -5590,7 +5623,7 @@ def _write_codex(db_path: str, python_exe: str) -> Path:
     pattern = re.compile(r"(?ms)^\[mcp_servers\.waggle\]\n.*?(?=^\[(?!mcp_servers\.waggle(?:\.env)?\])[^\n]+\]\n|\Z)")
     replacement = toml_block.rstrip() + "\n"
     if pattern.search(existing):
-        updated = pattern.sub(replacement, existing, count=1)
+        updated = pattern.sub(replacement.replace('\\', '\\\\'), existing, count=1)
     else:
         separator = "\n\n" if existing.strip() else ""
         updated = existing.rstrip() + separator + replacement
