@@ -2258,7 +2258,7 @@ def test_abhi_json_file_raises_validation_failure(tmp_path: Path) -> None:
 
 def test_clear_scope_dry_run_and_audit_trail(tmp_path: Path) -> None:
     graph = make_graph(tmp_path)
-    
+
     # 1. Add some initial scope-scoped data
     graph.add_node(
         label="Test Node",
@@ -2273,36 +2273,36 @@ def test_clear_scope_dry_run_and_audit_trail(tmp_path: Path) -> None:
         project="test_proj",
         session_id="test_sess",
     )
-    
+
     # Verify we have nodes
     stats_before = graph.get_stats()
     assert stats_before.total_nodes > 0
-    
+
     # 2. Perform a dry-run clear on the session
     result_dry = graph.clear_session(session_id="test_sess", dry_run=True)
     assert result_dry.dry_run is True
     assert result_dry.deleted_nodes > 0
     assert result_dry.deleted_transcripts > 0
     assert any(k in result_dry.counts_by_node_type for k in ("decision", "note", "entity", "fact"))
-    
+
     # Verify data is STILL in the graph
     stats_after_dry = graph.get_stats()
     assert stats_after_dry.total_nodes == stats_before.total_nodes
-    
+
     # Verify NO audit event was emitted for this dry-run
     events_dry = graph.list_audit_events(event_type="graph.scope_cleared")
     assert len(events_dry) == 0
-    
+
     # 3. Perform a real clear on the session
     result_real = graph.clear_session(session_id="test_sess", dry_run=False)
     assert result_real.dry_run is False
     assert result_real.deleted_nodes == result_dry.deleted_nodes
     assert result_real.deleted_transcripts == result_dry.deleted_transcripts
-    
+
     # Verify data is DELETED
     stats_after_real = graph.get_stats()
     assert stats_after_real.total_nodes < stats_before.total_nodes
-    
+
     # Verify audit event WAS emitted for this real clear
     events_real = graph.list_audit_events(event_type="graph.scope_cleared")
     assert len(events_real) == 1

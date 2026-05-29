@@ -244,6 +244,13 @@ def test_parser_accepts_graph_editor_commands() -> None:
     assert share_args.command == "share"
     assert share_args.file_ref == "file123"
 
+    doctor_json_args = parser.parse_args(["doctor", "--json"])
+    doctor_as_json_args = parser.parse_args(["doctor", "--as-json"])
+    assert doctor_json_args.command == "doctor"
+    assert doctor_json_args.as_json is True
+    assert doctor_as_json_args.command == "doctor"
+    assert doctor_as_json_args.as_json is True
+
 
 def test_doctor_flags_mixed_embedding_model_ids(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -1744,7 +1751,7 @@ def test_write_codex_agents_updates_existing_block_without_duplication(tmp_path:
 
 def test_clear_tools_dry_run_preview(tmp_path: Path) -> None:
     app = make_app(tmp_path)
-    
+
     app.graph.add_node(
         label="Vault Decision",
         content="Export this node to a markdown vault.",
@@ -1758,7 +1765,7 @@ def test_clear_tools_dry_run_preview(tmp_path: Path) -> None:
         project="alpha",
         session_id="sess-1",
     )
-    
+
     # 1. Test clear_session with dry_run=True (without confirm!)
     result = app.handle_tool_call("clear_session", {"session_id": "sess-1", "dry_run": True})
     assert result.isError is False
@@ -1769,19 +1776,19 @@ def test_clear_tools_dry_run_preview(tmp_path: Path) -> None:
     assert any(k in result.structuredContent["counts_by_node_type"] for k in ("decision", "note", "entity", "fact"))
     # Check text content prefix
     assert "[Preview] Would clear" in result.content[0].text
-    
+
     # Verify data still exists
     assert app.graph.get_stats().total_nodes > 0
     # Verify no audit event
     assert len(app.graph.list_audit_events(event_type="graph.scope_cleared")) == 0
-    
+
     # 2. Test clear_project with dry_run=True
     result_proj = app.handle_tool_call("clear_project", {"project": "alpha", "dry_run": True})
     assert result_proj.isError is False
     assert result_proj.structuredContent["dry_run"] is True
     assert result_proj.structuredContent["deleted_nodes"] > 0
     assert "[Preview] Would clear" in result_proj.content[0].text
-    
+
     # 3. Test clear_all with dry_run=True
     result_all = app.handle_tool_call("clear_all", {"dry_run": True})
     assert result_all.isError is False
@@ -1792,7 +1799,7 @@ def test_clear_tools_dry_run_preview(tmp_path: Path) -> None:
 
 def test_clear_cli_commands_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     app = make_app(tmp_path)
-    
+
     app.graph.add_node(
         label="Test Node",
         content="Use Redis for caching.",
@@ -1806,7 +1813,7 @@ def test_clear_cli_commands_dry_run(tmp_path: Path, capsys: pytest.CaptureFixtur
         project="alpha",
         session_id="sess-1",
     )
-    
+
     # Run clear-session with dry-run
     args = SimpleNamespace(
         command="clear-session",
@@ -1816,15 +1823,15 @@ def test_clear_cli_commands_dry_run(tmp_path: Path, capsys: pytest.CaptureFixtur
     )
     exit_code = _run_admin_command(app.config, args)
     assert exit_code == 0
-    
+
     payload = json.loads(capsys.readouterr().out)
     assert payload["dry_run"] is True
     assert payload["deleted_nodes"] > 0
     assert payload["deleted_transcripts"] > 0
-    
+
     # Verify data is not deleted
     assert app.graph.get_stats().total_nodes > 0
-    
+
     # Run clear-project with dry-run
     args = SimpleNamespace(
         command="clear-project",
@@ -1834,11 +1841,11 @@ def test_clear_cli_commands_dry_run(tmp_path: Path, capsys: pytest.CaptureFixtur
     )
     exit_code = _run_admin_command(app.config, args)
     assert exit_code == 0
-    
+
     payload = json.loads(capsys.readouterr().out)
     assert payload["dry_run"] is True
     assert payload["deleted_nodes"] > 0
-    
+
     # Run clear-all with dry-run
     args = SimpleNamespace(
         command="clear-all",
@@ -1847,7 +1854,7 @@ def test_clear_cli_commands_dry_run(tmp_path: Path, capsys: pytest.CaptureFixtur
     )
     exit_code = _run_admin_command(app.config, args)
     assert exit_code == 0
-    
+
     payload = json.loads(capsys.readouterr().out)
     assert payload["dry_run"] is True
     assert payload["deleted_nodes"] > 0

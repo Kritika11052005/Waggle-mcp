@@ -888,7 +888,6 @@ class ClearScopeResult(BaseModel):
     counts_by_node_type: dict[str, int] = Field(default_factory=dict)
 
 
-
 # ---------------------------------------------------------------------------
 # Diff / Merge models (abhi-diff-merge-tool)
 # ---------------------------------------------------------------------------

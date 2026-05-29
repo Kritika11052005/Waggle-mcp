@@ -137,6 +137,9 @@ WRITE_HEAVY_TOOLS = {
     "store_edge",
     "decompose_and_store",
     "observe_conversation",
+    "clear_session",
+    "clear_project",
+    "clear_all",
     # git-vocabulary names (canonical)
     "pull",
     "merge",
@@ -4181,7 +4184,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     clear_session.add_argument("--session-id", required=True)
     clear_session.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
-    clear_session.add_argument("--dry-run", action="store_true", help="Preview the clear operation without deleting data.")
+    clear_session.add_argument(
+        "--dry-run", action="store_true", help="Preview the clear operation without deleting data."
+    )
 
     clear_project = subparsers.add_parser(
         "clear-project",
@@ -4189,7 +4194,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     clear_project.add_argument("--project", required=True)
     clear_project.add_argument("--yes", action="store_true", help="Confirm the destructive clear operation.")
-    clear_project.add_argument("--dry-run", action="store_true", help="Preview the clear operation without deleting data.")
+    clear_project.add_argument(
+        "--dry-run", action="store_true", help="Preview the clear operation without deleting data."
+    )
 
     clear_all = subparsers.add_parser(
         "clear-all",
@@ -4506,7 +4513,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--fix", action="store_true", help="Re-embed stale transcript/node rows to the current model ID."
     )
     doctor.add_argument(
-        "--json", dest="as_json", action="store_true", help="Output doctor results in structured JSON format."
+        "--json",
+        "--as-json",
+        dest="as_json",
+        action="store_true",
+        help="Output doctor results in structured JSON format.",
     )
 
     demo_cmd = subparsers.add_parser(
@@ -5079,19 +5090,18 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, as_json: bool = False) 
                 print(f"  {_c(_CYAN, chr(0x2022))} {label}\n     {path}  [not found]")
 
         is_plausible = (
-            exists or
-            (sys.platform == "darwin" and ("macOS" in label or "Cursor" in label or "Antigravity" in label or "Codex" in label)) or
-            (sys.platform == "win32" and "Windows" in label) or
-            (sys.platform.startswith("linux") and ("Linux" in label or "Cursor" in label))
+            exists
+            or (
+                sys.platform == "darwin"
+                and ("macOS" in label or "Cursor" in label or "Antigravity" in label or "Codex" in label)
+            )
+            or (sys.platform == "win32" and "Windows" in label)
+            or (sys.platform.startswith("linux") and ("Linux" in label or "Cursor" in label))
         )
         if exists or is_plausible:
-            config_files_data.append({
-                "label": label,
-                "path": str(path),
-                "exists": exists,
-                "has_waggle": has_waggle,
-                "parsed": parsed
-            })
+            config_files_data.append(
+                {"label": label, "path": str(path), "exists": exists, "has_waggle": has_waggle, "parsed": parsed}
+            )
 
     if not waggle_found_in:
         issues.append(
@@ -5165,11 +5175,7 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, as_json: bool = False) 
                 "Set WAGGLE_MODEL=deterministic for offline-safe mode."
             )
 
-    embedding_model_data = {
-        "model_name": model_name,
-        "cached": is_cached,
-        "deterministic": is_deterministic
-    }
+    embedding_model_data = {"model_name": model_name, "cached": is_cached, "deterministic": is_deterministic}
 
     # ── 4. WAGGLE_STARTUP_MODE ───────────────────────────────────────────────
     if not as_json:
@@ -5208,7 +5214,7 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, as_json: bool = False) 
             "node_model_counts": node_models,
             "transcript_stale_rows": store_health["transcript_stale_rows"],
             "node_stale_rows": store_health["node_stale_rows"],
-            "mixed_models": store_health["mixed_models"]
+            "mixed_models": store_health["mixed_models"],
         }
 
     # ── 5. WAGGLE_STARTUP_MODE ───────────────────────────────────────────────
@@ -5244,10 +5250,7 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, as_json: bool = False) 
                     "      import sys; sys.stdout.reconfigure(encoding='utf-8')"
                 )
             issues.append(f"Windows stdout encoding is {enc!r} — set PYTHONUTF8=1 or use python -X utf8.")
-        stdout_encoding_data = {
-            "encoding": enc,
-            "is_utf8": is_utf8
-        }
+        stdout_encoding_data = {"encoding": enc, "is_utf8": is_utf8}
 
     # ── 7. Known gotchas ─────────────────────────────────────────────────────
     if not as_json:
@@ -5267,16 +5270,12 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, as_json: bool = False) 
             result = {
                 "ok": False,
                 "config_files": config_files_data,
-                "database": {
-                    "path": str(db_path),
-                    "exists": db_exists,
-                    "parent_exists": db_dir_exists
-                },
+                "database": {"path": str(db_path), "exists": db_exists, "parent_exists": db_dir_exists},
                 "embedding_model": embedding_model_data,
                 "embedding_store": embedding_store_data,
                 "startup_mode": config.startup_mode,
                 "stdout_encoding": stdout_encoding_data,
-                "issues": issues
+                "issues": issues,
             }
             print(json.dumps(result, indent=2))
         return 1
@@ -5288,16 +5287,12 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, as_json: bool = False) 
             result = {
                 "ok": True,
                 "config_files": config_files_data,
-                "database": {
-                    "path": str(db_path),
-                    "exists": db_exists,
-                    "parent_exists": db_dir_exists
-                },
+                "database": {"path": str(db_path), "exists": db_exists, "parent_exists": db_dir_exists},
                 "embedding_model": embedding_model_data,
                 "embedding_store": embedding_store_data,
                 "startup_mode": config.startup_mode,
                 "stdout_encoding": stdout_encoding_data,
-                "issues": []
+                "issues": [],
             }
             print(json.dumps(result, indent=2))
         return 0
@@ -5626,7 +5621,7 @@ def _write_codex(db_path: str, python_exe: str) -> Path:
     pattern = re.compile(r"(?ms)^\[mcp_servers\.waggle\]\n.*?(?=^\[(?!mcp_servers\.waggle(?:\.env)?\])[^\n]+\]\n|\Z)")
     replacement = toml_block.rstrip() + "\n"
     if pattern.search(existing):
-        updated = pattern.sub(replacement.replace('\\', '\\\\'), existing, count=1)
+        updated = pattern.sub(lambda m: replacement, existing, count=1)
     else:
         separator = "\n\n" if existing.strip() else ""
         updated = existing.rstrip() + separator + replacement
@@ -6235,7 +6230,9 @@ def main() -> None:
     if command == "doctor":
         # Doctor only needs the config — not a live backend connection.
         config = AppConfig.from_env()
-        sys.exit(_run_doctor(config, fix=bool(getattr(args, "fix", False)), as_json=bool(getattr(args, "as_json", False))))
+        sys.exit(
+            _run_doctor(config, fix=bool(getattr(args, "fix", False)), as_json=bool(getattr(args, "as_json", False)))
+        )
 
     config = AppConfig.from_env()
     if command == "serve" and getattr(args, "transport", None):
