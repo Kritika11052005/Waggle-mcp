@@ -8,34 +8,35 @@ Requirements:
     pip install "sentence-transformers>=2.7.0" "optimum[onnxruntime]"
 """
 
+import argparse
 import os
-import time
 import shutil
-import numpy as np
+import time
 from pathlib import Path
+
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
+
 
 def get_dir_size_mb(path: str) -> float:
     total_size = sum(f.stat().st_size for f in Path(path).glob('**/*') if f.is_file())
     return total_size / (1024 * 1024)
 
-def main():
+def main(export_dir: str):
     model_name = "all-MiniLM-L6-v2"
-    export_dir = "../onnx_model"
 
     print(f"=== 1. Loading original PyTorch model: {model_name} ===")
     model_pt = SentenceTransformer(model_name)
 
-    print(f"\n=== 2. Exporting to ONNX format ===")
-    # Using ST-native ONNX backend. 
+    print("\n=== 2. Exporting to ONNX format ===")
+    # Using ST-native ONNX backend.
     # model_kwargs={"export": True} forces optimum to build the ONNX graph locally.
     model_onnx = SentenceTransformer(
-        model_name, 
-        backend="onnx", 
+        model_name,
+        backend="onnx",
         model_kwargs={"export": True}
     )
-    
+
     # Save the artifact to fulfill the issue requirements
     if os.path.exists(export_dir):
         shutil.rmtree(export_dir)
@@ -65,24 +66,24 @@ def main():
     embeddings_onnx = model_onnx.encode(sentences, convert_to_numpy=True)
 
     print("Checking cosine similarity for each sentence pair...")
-    for i, text in enumerate(sentences):
+    for i, _ in enumerate(sentences):
         # Calculate cosine similarity between the Torch and ONNX vectors
         sim = cos_sim(embeddings_pt[i], embeddings_onnx[i]).item()
         print(f"  Sentence {i+1} similarity: {sim:.6f}")
-        
+
         # Assert parity >= 0.999 per acceptance criteria
         assert sim >= 0.999, f"Parity failed for sentence {i+1}: similarity = {sim}"
-        
+
     print("Parity check passed! All similarities are >= 0.999.")
 
     print("\n=== 4. Performance and Size Comparison ===")
-    
+
     onnx_size = get_dir_size_mb(export_dir)
     print(f"  Exported ONNX Directory Size: {onnx_size:.2f} MB")
 
     iterations = 50
     print(f"\nBenchmarking over {iterations} iterations (Batch size: {len(sentences)})...")
-    
+
     # Warmup
     _ = model_pt.encode(sentences)
     _ = model_onnx.encode(sentences)
@@ -92,7 +93,7 @@ def main():
     for _ in range(iterations):
         _ = model_pt.encode(sentences)
     time_pt = time.perf_counter() - start_pt
-    
+
     # ONNX timing
     start_onnx = time.perf_counter()
     for _ in range(iterations):
@@ -104,5 +105,13 @@ def main():
     print(f"Speedup      : {time_pt / time_onnx:.2f}x faster")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Export all-MiniLM-L6-v2 to ONNX and validate output parity.")
+    parser.add_argument(
+        "-o", "--output-dir",
+        type=str,
+        default="onnx_model_export",
+        help="The directory where the ONNX model and tokenizer will be saved (default: onnx_model_export)"
+    )
 
+    args = parser.parse_args()
+    main(args.output_dir)
