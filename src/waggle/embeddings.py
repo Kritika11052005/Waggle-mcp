@@ -48,7 +48,7 @@ class EmbeddingModel:
 
     _DETERMINISTIC_MODELS = {"fake", "fake-model", "deterministic", "offline-demo"}
 
-    _GLOBAL_EMBED_CACHE: OrderedDict[str, bytes] = OrderedDict()
+    _GLOBAL_EMBED_CACHE: OrderedDict[tuple[str, str], bytes] = OrderedDict()
     _GLOBAL_EMBED_CACHE_MAXSIZE = 512
     _GLOBAL_EMBED_CACHE_LOCK = threading.Lock()
 
@@ -171,11 +171,13 @@ class EmbeddingModel:
         if not normalized:
             raise ValueError("Cannot embed empty text.")
 
+        cache_key = (self.model_name, normalized)
+
         # Fast path: return cached embedding (copy so callers can mutate freely)
         with EmbeddingModel._GLOBAL_EMBED_CACHE_LOCK:
-            if normalized in EmbeddingModel._GLOBAL_EMBED_CACHE:
-                EmbeddingModel._GLOBAL_EMBED_CACHE.move_to_end(normalized)
-                return np.frombuffer(EmbeddingModel._GLOBAL_EMBED_CACHE[normalized], dtype=np.float32).copy()
+            if cache_key in EmbeddingModel._GLOBAL_EMBED_CACHE:
+                EmbeddingModel._GLOBAL_EMBED_CACHE.move_to_end(cache_key)
+                return np.frombuffer(EmbeddingModel._GLOBAL_EMBED_CACHE[cache_key], dtype=np.float32).copy()
 
         if self.uses_deterministic_mode:
             # Canonical deterministic path — always safe to cache.
@@ -204,13 +206,13 @@ class EmbeddingModel:
         if should_cache:
             blob = result.tobytes()
             with EmbeddingModel._GLOBAL_EMBED_CACHE_LOCK:
-                if normalized in EmbeddingModel._GLOBAL_EMBED_CACHE:
-                    EmbeddingModel._GLOBAL_EMBED_CACHE.move_to_end(normalized)
+                if cache_key in EmbeddingModel._GLOBAL_EMBED_CACHE:
+                    EmbeddingModel._GLOBAL_EMBED_CACHE.move_to_end(cache_key)
                 else:
                     if len(EmbeddingModel._GLOBAL_EMBED_CACHE) >= EmbeddingModel._GLOBAL_EMBED_CACHE_MAXSIZE:
                         EmbeddingModel._GLOBAL_EMBED_CACHE.popitem(last=False)
 
-                EmbeddingModel._GLOBAL_EMBED_CACHE[normalized] = blob
+                EmbeddingModel._GLOBAL_EMBED_CACHE[cache_key] = blob
         return result
 
     def embed_batch(self, texts: list[str], *, wait_timeout: float = 30.0) -> np.ndarray:
