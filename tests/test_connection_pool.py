@@ -1,11 +1,15 @@
 """Tests for :mod:`waggle.connection_pool` and its use by ``MemoryGraph``.
 
-Covers the acceptance criteria from issue #126:
+Covers the acceptance criteria from issue #126 plus the hardening from review:
 
 * connections are reused across operations (the factory is not re-invoked and no
   fresh PRAGMA round happens per checkout),
 * the pool size stays bounded under repeated checkout/return,
 * two threads checking out connections at the same time do not crash,
+* a failed construction closes the connections it already opened,
+* a failed ``commit()`` rolls back before the connection returns to the pool,
+* ``close()`` wakes waiting checkouts and never closes a leased connection
+  underneath its borrower,
 * ``MemoryGraph`` routes its operations through the pool and tears it down on
   ``close()`` while tenant clones safely share it.
 """
@@ -14,6 +18,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -47,6 +52,24 @@ class _CountingFactory:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
+
+
+class _CommitControlConnection(sqlite3.Connection):
+    """Connection whose commit can be made to fail, for transaction tests."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.fail_commit = False
+        self.rolled_back = False
+
+    def commit(self) -> None:
+        if self.fail_commit:
+            raise sqlite3.OperationalError("commit boom")
+        super().commit()
+
+    def rollback(self) -> None:
+        self.rolled_back = True
+        super().rollback()
 
 
 class FakeEmbeddingModel:
@@ -89,7 +112,7 @@ def pool(tmp_path: Path):
 
 
 # --------------------------------------------------------------------------- #
-# Pool construction and configuration
+# Construction and configuration
 # --------------------------------------------------------------------------- #
 def test_factory_called_once_per_connection_at_creation(tmp_path: Path) -> None:
     factory = _CountingFactory(tmp_path / "db.sqlite")
@@ -126,6 +149,28 @@ def test_pragmas_applied_to_pooled_connections(pool: SQLiteConnectionPool) -> No
     assert foreign_keys == 1
 
 
+def test_failed_construction_closes_already_created_connections(tmp_path: Path) -> None:
+    created: list[sqlite3.Connection] = []
+    calls = {"n": 0}
+
+    def factory() -> sqlite3.Connection:
+        calls["n"] += 1
+        if calls["n"] == 3:  # fail partway through construction
+            raise sqlite3.OperationalError("cannot open database")
+        connection = sqlite3.connect(str(tmp_path / "fail.db"), check_same_thread=False)
+        created.append(connection)
+        return connection
+
+    with pytest.raises(sqlite3.OperationalError):
+        SQLiteConnectionPool(factory, size=4)
+
+    # The two connections opened before the failure must have been closed.
+    assert len(created) == 2
+    for connection in created:
+        with pytest.raises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+
+
 # --------------------------------------------------------------------------- #
 # Reuse: no new connection / PRAGMA per checkout
 # --------------------------------------------------------------------------- #
@@ -135,9 +180,7 @@ def test_connections_are_reused_without_new_factory_calls(pool: SQLiteConnection
     for _ in range(50):
         with pool.checkout() as connection:
             seen.add(id(connection))
-    # The factory is never invoked again after construction...
     assert pool.factory.calls == calls_after_construction
-    # ...and every connection handed out came from the pre-created set.
     assert len(seen) <= pool.size
 
 
@@ -149,11 +192,10 @@ def test_pool_size_stays_bounded(pool: SQLiteConnectionPool) -> None:
         connections = [stack.enter_context(pool.checkout()) for _ in range(pool.size)]
         assert len(connections) == pool.size
         assert pool.available() == 0
-        # No fourth connection exists; a further checkout times out rather than
+        # No extra connection exists; a further checkout times out rather than
         # silently growing the pool.
         with pytest.raises(TimeoutError), pool.checkout():
             pass
-    # Everything is returned once the ExitStack unwinds.
     assert pool.available() == pool.size
 
 
@@ -187,6 +229,37 @@ def test_rollback_on_error(pool: SQLiteConnectionPool) -> None:
     assert count == 0
 
 
+def test_commit_failure_rolls_back_before_returning(tmp_path: Path) -> None:
+    db_path = tmp_path / "commitfail.db"
+
+    def factory() -> sqlite3.Connection:
+        connection = sqlite3.connect(str(db_path), factory=_CommitControlConnection, check_same_thread=False)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    created = SQLiteConnectionPool(factory, size=1)
+    try:
+        with created.checkout() as connection:
+            connection.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+
+        target = created._all_connections[0]
+        target.fail_commit = True
+        target.rolled_back = False
+
+        # Clean body, but the commit on exit fails: expect rollback + propagate.
+        with pytest.raises(sqlite3.OperationalError), created.checkout() as connection:
+            connection.execute("INSERT INTO t (id) VALUES (1)")
+
+        assert target.rolled_back is True
+        assert created.available() == 1  # still returned to the pool
+
+        target.fail_commit = False
+        with created.checkout() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    finally:
+        created.close()
+
+
 # --------------------------------------------------------------------------- #
 # Thread safety
 # --------------------------------------------------------------------------- #
@@ -206,7 +279,7 @@ def test_concurrent_checkout_does_not_crash(tmp_path: Path) -> None:
             for _ in range(40):
                 with created.checkout() as conn:
                     conn.execute("SELECT n FROM counter").fetchone()
-        except BaseException as exc:
+        except BaseException as exc:  # record for the assertion
             errors.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(8)]
@@ -218,7 +291,6 @@ def test_concurrent_checkout_does_not_crash(tmp_path: Path) -> None:
     try:
         assert not any(thread.is_alive() for thread in threads), "a worker thread hung"
         assert errors == []
-        # Every borrowed connection was returned; the pool never grew or shrank.
         assert created.available() == created.size
         assert factory.calls == created.size
     finally:
@@ -253,6 +325,64 @@ def test_close_closes_underlying_connections(tmp_path: Path) -> None:
         leaked.execute("SELECT 1")
 
 
+def test_close_wakes_a_waiting_checkout(tmp_path: Path) -> None:
+    factory = _CountingFactory(tmp_path / "wake.db")
+    created = SQLiteConnectionPool(factory, size=1, checkout_timeout=None)
+    held = created.checkout()
+    held.__enter__()  # occupy the only connection so the waiter must block
+
+    outcome: dict[str, str] = {}
+
+    def waiter() -> None:
+        try:
+            with created.checkout():
+                outcome["result"] = "acquired"
+        except ConnectionPoolClosedError:
+            outcome["result"] = "closed"
+        except BaseException as exc:  # pragma: no cover - unexpected
+            outcome["result"] = f"error:{type(exc).__name__}"
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    time.sleep(0.2)  # let the waiter reach the blocking wait
+
+    created.close()  # must wake the blocked waiter, not strand it
+    held.__exit__(None, None, None)
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert outcome["result"] == "closed"
+
+
+def test_close_does_not_close_a_leased_connection(tmp_path: Path) -> None:
+    factory = _CountingFactory(tmp_path / "lease.db")
+    created = SQLiteConnectionPool(factory, size=2)
+    with created.checkout() as connection:
+        created.close()  # closes idle connections, but not this leased one
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+    assert created.closed is True
+
+
+def test_close_with_drain_timeout_waits_for_leases(tmp_path: Path) -> None:
+    factory = _CountingFactory(tmp_path / "drain.db")
+    created = SQLiteConnectionPool(factory, size=2)
+
+    released = threading.Event()
+
+    def borrower() -> None:
+        with created.checkout():
+            time.sleep(0.3)
+        released.set()
+
+    thread = threading.Thread(target=borrower)
+    thread.start()
+    time.sleep(0.05)  # ensure the borrower has leased a connection
+
+    created.close(drain_timeout=5.0)
+    assert released.is_set()  # close waited for the lease to drain
+    thread.join(timeout=5)
+
+
 def test_context_manager_closes_pool(tmp_path: Path) -> None:
     factory = _CountingFactory(tmp_path / "ctx.db")
     with SQLiteConnectionPool(factory, size=2) as created:
@@ -280,8 +410,7 @@ def test_memory_graph_builds_a_bounded_pool(tmp_path: Path) -> None:
 def test_memory_graph_operations_do_not_open_new_connections(tmp_path: Path, monkeypatch) -> None:
     graph = _make_graph(tmp_path)
     try:
-        # After construction nothing should call _connect again; the pool holds
-        # every connection. If an operation tried to, this would fail loudly.
+
         def _fail() -> sqlite3.Connection:  # pragma: no cover - only on regression
             raise AssertionError("_connect was called after pool construction")
 
@@ -302,6 +431,13 @@ def test_memory_graph_operations_do_not_open_new_connections(tmp_path: Path, mon
         graph.close()
 
 
+def test_memory_graph_is_a_context_manager(tmp_path: Path) -> None:
+    with MemoryGraph(tmp_path / "cm.db", FakeEmbeddingModel()) as graph:
+        graph.add_node(label="inside", content="within the with block", node_type=NodeType.ENTITY)
+        pool = graph._pool
+    assert pool.closed is True
+
+
 def test_for_tenant_shares_pool_without_owning_it(tmp_path: Path) -> None:
     graph = _make_graph(tmp_path)
     try:
@@ -312,7 +448,6 @@ def test_for_tenant_shares_pool_without_owning_it(tmp_path: Path) -> None:
         # Closing the clone must not tear down the shared pool.
         clone.close()
         assert graph._pool.closed is False
-        # The owner can still use the pool afterwards.
         graph.add_node(label="still-alive", content="owner still works", node_type=NodeType.ENTITY)
     finally:
         graph.close()

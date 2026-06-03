@@ -1,21 +1,23 @@
-"""Ad-hoc before/after benchmark for issue #126.
+"""Ad-hoc before/after benchmark for issue #126 (not part of the package).
 
-Measures two things:
+Measures two things, reporting the median over several runs:
 
-1. Micro: the raw cost of acquiring a usable connection 100 times, the old way (sqlite3.connect + 7 PRAGMAs every time) vs. the new way (pool checkout).
-2. End-to-end: 100 MemoryGraph.add_node operations with the pool vs. with the pool patched to open a fresh connection per checkout (the pre-PR behavior).
+1. Micro: the raw cost of acquiring a usable connection 100 times, the old way
+   (sqlite3.connect + 7 PRAGMAs every time) vs. the new way (pool checkout).
+2. End-to-end: 100 MemoryGraph.add_node operations with the pool vs. with the
+   pool patched to open a fresh connection per checkout (the pre-PR behavior).
 """
 
 from __future__ import annotations
 
+import statistics
 import sys
 import time
-import gc
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import numpy as np  # noqa: E402
 
@@ -23,6 +25,7 @@ from waggle.graph import MemoryGraph  # noqa: E402
 from waggle.models import NodeType  # noqa: E402
 
 N = 100
+RUNS = 5
 
 
 class FakeEmbeddingModel:
@@ -47,7 +50,7 @@ class FakeEmbeddingModel:
         return 0.0 if na == 0 or nb == 0 else float(np.dot(a, b) / (na * nb))
 
 
-def micro_benchmark(graph: MemoryGraph) -> None:
+def micro_once(graph: MemoryGraph) -> tuple[float, float]:
     # OLD: fresh connection + full PRAGMA round every acquisition.
     start = time.perf_counter()
     for _ in range(N):
@@ -63,15 +66,14 @@ def micro_benchmark(graph: MemoryGraph) -> None:
         with graph._pool.checkout() as conn:
             conn.execute("SELECT 1").fetchone()
     new = time.perf_counter() - start
-
-    print(f"  acquisition x{N}:  before (fresh+PRAGMAs) = {old * 1e3:8.2f} ms   "
-          f"after (pool) = {new * 1e3:8.2f} ms   speedup = {old / new:5.2f}x")
+    return old, new
 
 
-def e2e_benchmark() -> None:
+def e2e_once() -> tuple[float, float]:
     embedder = FakeEmbeddingModel()
 
-    # BEFORE: pool patched so each checkout opens a brand-new connection, exactly reproducing the pre-PR `with self._connect() as connection:` path.
+    # BEFORE: pool patched so each checkout opens a brand-new connection,
+    # exactly reproducing the pre-PR `with self._connect() as connection:` path.
     with TemporaryDirectory() as tmp:
         graph = MemoryGraph(Path(tmp) / "before.db", embedder)
 
@@ -92,11 +94,7 @@ def e2e_benchmark() -> None:
         for i in range(N):
             graph.add_node(label=f"n{i}", content=f"content number {i}", node_type=NodeType.ENTITY)
         before = time.perf_counter() - start
-        
         graph.close()
-        del graph
-        gc.collect()
-        time.sleep(0.05)
 
     # AFTER: real pooled connections.
     with TemporaryDirectory() as tmp:
@@ -105,23 +103,37 @@ def e2e_benchmark() -> None:
         for i in range(N):
             graph.add_node(label=f"n{i}", content=f"content number {i}", node_type=NodeType.ENTITY)
         after = time.perf_counter() - start
-        
         graph.close()
-        del graph
-        gc.collect()      # Force Python to destroy any lingering cursors/objects
-        time.sleep(0.05)  # Give a split second to release the file handle completely
+    return before, after
 
-    print(f"  add_node x{N}:     before (fresh per op)  = {before * 1e3:8.2f} ms   "
-          f"after (pool) = {after * 1e3:8.2f} ms   speedup = {before / after:5.2f}x")
+
+def report(name: str, before: list[float], after: list[float]) -> None:
+    b = statistics.median(before)
+    a = statistics.median(after)
+    print(
+        f"  {name:<16} before = {b * 1e3:8.2f} ms   after = {a * 1e3:8.2f} ms   "
+        f"speedup = {b / a:5.2f}x   (median of {RUNS} runs)"
+    )
 
 
 if __name__ == "__main__":
-    print(f"SQLite connection pooling benchmark (N={N}, median of 5 runs)\n")
+    print(f"SQLite connection pooling benchmark (N={N} ops/run, {RUNS} runs)\n")
+
+    micro_old: list[float] = []
+    micro_new: list[float] = []
     with TemporaryDirectory() as tmp:
         g = MemoryGraph(Path(tmp) / "micro.db", FakeEmbeddingModel())
-        for _ in range(5):
-            micro_benchmark(g)
+        for _ in range(RUNS):
+            o, n = micro_once(g)
+            micro_old.append(o)
+            micro_new.append(n)
         g.close()
-    print()
-    for _ in range(5):
-        e2e_benchmark()
+    report("acquisition x100", micro_old, micro_new)
+
+    e2e_before: list[float] = []
+    e2e_after: list[float] = []
+    for _ in range(RUNS):
+        b, a = e2e_once()
+        e2e_before.append(b)
+        e2e_after.append(a)
+    report("add_node x100", e2e_before, e2e_after)
