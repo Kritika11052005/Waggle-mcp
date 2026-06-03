@@ -111,18 +111,24 @@ jobs:
       - name: Resolve release version
         id: version
         shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            REF="${GITHUB_REF_NAME}"
+          if [ "$REF_TYPE" = "tag" ]; then
+            REF="$REF_NAME"
           else
-            REF="${{ github.event.release.tag_name }}"
+            REF="$RELEASE_TAG"
           fi
           echo "value=${REF#v}" >> "$GITHUB_OUTPUT"
 
       - name: Generate bundle-metadata.json
+        env:
+          BUNDLE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           node apps/vscode-extension/scripts/generate-bundle-metadata.mjs \
-            "${{ steps.version.outputs.value }}" \
+            "$BUNDLE_VERSION" \
             dist/bundle-metadata.json
 
       - name: Upload bundle-metadata artifact

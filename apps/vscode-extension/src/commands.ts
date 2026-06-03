@@ -228,7 +228,8 @@ export function registerWaggleCommands(ctx: WaggleContext, disposables: vscode.D
         body: JSON.stringify({
           project,
           query: query.trim()
-        })
+        }),
+        signal: AbortSignal.timeout(30_000)
       });
       const payload = (await response.json()) as { message?: string; error?: string; [key: string]: unknown };
       if (!response.ok) {

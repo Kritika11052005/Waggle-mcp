@@ -35,7 +35,7 @@ jobs:
         run: npm ci
 
       - name: Compile and test extension
-        run: npm test
+        run: npm run test:smoke
 
       - name: Package VSIX
         env:

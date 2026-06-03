@@ -39,7 +39,11 @@ export function buildWorkspaceServerConfig(
 export async function parseJsonFile(filePath: string): Promise<JsonObject> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as JsonObject;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isJsonObject(parsed)) {
+      throw new Error(`${filePath} must contain a JSON object at the top level.`);
+    }
+    return parsed;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {};
