@@ -2,10 +2,7 @@ from waggle.auth import api_key_prefix
 
 
 def test_api_key_prefix_standard_format():
-    assert (
-        api_key_prefix("sk_live_abc123.secret_part_here")
-        == "sk_live_abc123"
-    )
+    assert api_key_prefix("sk_live_abc123.secret_part_here") == "sk_live_abc123"
 
 
 def test_api_key_prefix_multiple_dots_only_splits_on_first():
@@ -26,10 +23,7 @@ def test_api_key_prefix_exactly_sixteen_characters():
 
 
 def test_api_key_prefix_strips_whitespace():
-    assert (
-        api_key_prefix("   sk_live_abc.secret   ")
-        == "sk_live_abc"
-    )
+    assert api_key_prefix("   sk_live_abc.secret   ") == "sk_live_abc"
 
 
 def test_api_key_prefix_empty_string():
