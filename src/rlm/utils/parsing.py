@@ -96,7 +96,6 @@ def format_iteration(iteration: RLMIteration, max_character_length: int = 20000)
     return messages
 
 # REPL formatting helpers
-
 def format_execution_result(result: REPLResult) -> str:
     """
     Format the execution result as a string for display.
@@ -153,4 +152,3 @@ def convert_context_for_repl(context):
         return context, None
 
     return context, None
-
