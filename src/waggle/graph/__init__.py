@@ -1872,23 +1872,12 @@ class MemoryGraph(TranscriptMixin, TraversalMixin, MutationMixin, MemoryGraphBas
             # The lock was released during compute. Only clear the stale flag if the
             # row is still the one we read (every stale-marking path bumps
             # updated_at): if membership changed and re-staled it meanwhile, the
-            # WHERE misses and we leave it stale rather than save an outdated vector.
+            # guard misses and we leave it stale rather than save an outdated vector.
             with self._lock, self._pool.checkout() as connection:
-                cursor = connection.execute(
-                    """
-                    UPDATE context_windows
-                    SET embedding = ?, embedding_stale = 0, updated_at = ?
-                    WHERE tenant_id = ? AND id = ? AND embedding_stale = 1 AND updated_at = ?
-                    """,
-                    (
-                        self._encode_embedding(embedding),
-                        utc_now().isoformat(),
-                        self.tenant_id,
-                        window_id,
-                        observed_updated_at,
-                    ),
+                saved = self._save_window_embedding(
+                    connection, window_id, embedding, expected_updated_at=observed_updated_at
                 )
-            if cursor.rowcount and cursor.rowcount > 0:
+            if saved:
                 recomputed += 1
         return recomputed
 
@@ -2368,10 +2357,11 @@ class MemoryGraph(TranscriptMixin, TraversalMixin, MutationMixin, MemoryGraphBas
         return self.embedding_model.embed(window_text[:12000])
 
     def get_window_embedding(self, window_id: str) -> np.ndarray | None:
+        observed_updated_at: str | None = None
         with self._lock, self._pool.checkout() as connection:
             row = connection.execute(
                 """
-                SELECT embedding, embedding_stale
+                SELECT embedding, embedding_stale, updated_at
                 FROM context_windows
                 WHERE tenant_id = ? AND id = ?
                 """,
@@ -2379,6 +2369,7 @@ class MemoryGraph(TranscriptMixin, TraversalMixin, MutationMixin, MemoryGraphBas
             ).fetchone()
             if row is None:
                 return None
+            observed_updated_at = row["updated_at"]
             if row["embedding"] is not None and not bool(row["embedding_stale"]):
                 decoded = self._decode_embedding(row["embedding"])
                 if decoded is not None:
@@ -2390,18 +2381,56 @@ class MemoryGraph(TranscriptMixin, TraversalMixin, MutationMixin, MemoryGraphBas
         if embedding is None:
             return None
         with self._lock, self._pool.checkout() as connection:
-            self._save_window_embedding(connection, window_id, embedding)
+            # The lock was released during compute. Persist the recompute only if
+            # the row is unchanged since we read it; if another writer re-staled it
+            # or changed membership meanwhile (which bumps updated_at), skip the
+            # save and return our value — the newer state is recomputed on the next
+            # read rather than being clobbered here. (issue #71 review)
+            self._save_window_embedding(connection, window_id, embedding, expected_updated_at=observed_updated_at)
         return embedding
 
-    def _save_window_embedding(self, connection: sqlite3.Connection, window_id: str, embedding: np.ndarray) -> None:
-        connection.execute(
-            """
-            UPDATE context_windows
-            SET embedding = ?, embedding_stale = 0, updated_at = ?
-            WHERE tenant_id = ? AND id = ?
-            """,
-            (self._encode_embedding(embedding), utc_now().isoformat(), self.tenant_id, window_id),
-        )
+    def _save_window_embedding(
+        self,
+        connection: sqlite3.Connection,
+        window_id: str,
+        embedding: np.ndarray,
+        *,
+        expected_updated_at: str | None = None,
+    ) -> bool:
+        """Persist a (re)computed window embedding and clear the stale flag.
+
+        When ``expected_updated_at`` is supplied the write is optimistic: it only
+        lands if the row's ``updated_at`` is still the value observed before the
+        lock was released for ``compute_window_embedding``. A concurrent
+        membership change or re-stale bumps ``updated_at``, so this prevents
+        clobbering newer state with a vector computed from a stale read. Returns
+        ``True`` if a row was written. (issue #71 review)
+        """
+        if expected_updated_at is None:
+            cursor = connection.execute(
+                """
+                UPDATE context_windows
+                SET embedding = ?, embedding_stale = 0, updated_at = ?
+                WHERE tenant_id = ? AND id = ?
+                """,
+                (self._encode_embedding(embedding), utc_now().isoformat(), self.tenant_id, window_id),
+            )
+        else:
+            cursor = connection.execute(
+                """
+                UPDATE context_windows
+                SET embedding = ?, embedding_stale = 0, updated_at = ?
+                WHERE tenant_id = ? AND id = ? AND updated_at = ?
+                """,
+                (
+                    self._encode_embedding(embedding),
+                    utc_now().isoformat(),
+                    self.tenant_id,
+                    window_id,
+                    expected_updated_at,
+                ),
+            )
+        return bool(cursor.rowcount and cursor.rowcount > 0)
 
     def extract_window_entities(self, window_id: str) -> list[dict[str, str]]:
         nodes = self.get_window_nodes(

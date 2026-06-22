@@ -648,3 +648,34 @@ def test_recompute_window_skips_when_restaled_during_compute(tmp_path: Path, mon
     assert graph.recompute_stale_window_embeddings() == 0
     # ...and the window is left stale for a later, clean recompute.
     assert graph.get_context_window(window_id).embedding_stale is True
+
+
+def test_get_window_embedding_skips_save_when_restaled_during_compute(tmp_path: Path, monkeypatch):
+    graph, window_id = _window_with_embedding(tmp_path)
+    # Make the window stale so the read falls through to the lazy recompute path.
+    with sqlite3.connect(graph.db_path) as conn:
+        conn.execute(
+            "UPDATE context_windows SET embedding_stale = 1, updated_at = ? WHERE tenant_id = ? AND id = ?",
+            ("2025-04-04T00:00:00+00:00", graph.tenant_id, window_id),
+        )
+        conn.commit()
+
+    real_compute = graph.compute_window_embedding
+
+    def racing_compute(wid: str):
+        # Another writer re-stales the window (bumping updated_at) after get_window_embedding
+        # read it but before the save — the optimistic guard must skip the save.
+        with sqlite3.connect(graph.db_path) as conn:
+            conn.execute(
+                "UPDATE context_windows SET embedding_stale = 1, updated_at = ? WHERE tenant_id = ? AND id = ?",
+                ("2099-01-01T00:00:00+00:00", graph.tenant_id, wid),
+            )
+            conn.commit()
+        return real_compute(wid)
+
+    monkeypatch.setattr(graph, "compute_window_embedding", racing_compute)
+    # The caller still gets a usable vector (best-effort read)...
+    assert graph.get_window_embedding(window_id) is not None
+    # ...but the concurrent state is preserved: the save was skipped, so the
+    # window stays stale rather than being marked fresh with an outdated vector.
+    assert graph.get_context_window(window_id).embedding_stale is True

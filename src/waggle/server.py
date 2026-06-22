@@ -93,6 +93,7 @@ from waggle.recursive_context import (
     RecursiveContextController,
 )
 from waggle.runtime_context import runtime_context
+from waggle.runtime_info import SERVER_NAME, WAGGLE_SERVER_INFO
 from waggle.serializer import (
     serialize_abhi_chunk_load,
     serialize_abhi_inspect,
@@ -1673,10 +1674,11 @@ class WaggleServer:
 
     def initialization_options(self) -> InitializationOptions:
         return InitializationOptions(
-            server_name="waggle",
-            server_version="0.2.0",
+            server_name=SERVER_NAME,
+            server_version=__version__,
             capabilities=self.server.get_capabilities(
-                notification_options=NotificationOptions(), experimental_capabilities={}
+                notification_options=NotificationOptions(),
+                experimental_capabilities={"waggle_server_info": WAGGLE_SERVER_INFO},
             ),
         )
 
@@ -3944,7 +3946,13 @@ async def run_stdio(config: AppConfig) -> None:
     app = get_app(config)
     graph = app._root_graph
     em = graph.embedding_model
-    if not config.is_fast_mode and hasattr(em, "start_background_warmup") and not getattr(em, "_warmup_started", False):
+    is_bundled_runtime = os.environ.get("WAGGLE_BUNDLED_RUNTIME", "").strip() in {"1", "true", "yes"}
+    if (
+        not is_bundled_runtime
+        and not config.is_fast_mode
+        and hasattr(em, "start_background_warmup")
+        and not getattr(em, "_warmup_started", False)
+    ):
         # Kick off background warmup so the first semantic call is fast.
         em.start_background_warmup()
     if config.is_strict_mode:
@@ -5266,7 +5274,7 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
             warnings.append(reason)
             checks["embedding_model"] = {"status": "warn", "model_id": model_name, "reason": reason}
 
-    # ── 4. WAGGLE_STARTUP_MODE ───────────────────────────────────────────────
+    # ── 4. Embedding store ───────────────────────────────────────────────────
     emit(_c(_BOLD, "\n[4] Embedding store"))
     checks["graph_schema"] = {"status": "ok"}
     try:
@@ -5281,6 +5289,7 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
                 )
                 ok_items.append("Stale embeddings re-embedded")
                 store_health = graph.get_embedding_store_health()
+
             checksum_failures = (
                 store_health["node_checksum_failures"]
                 + store_health["transcript_checksum_failures"]
@@ -5305,9 +5314,9 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
                     + store_health["window_checksum_failures"]
                 )
             if fix and store_health["window_stale_rows"]:
-                # Repair stale window embeddings even when nothing failed its
-                # checksum (membership changes flag windows stale without corrupting
-                # anything); the corrupt-clear path above only runs on failures.
+                # Repair stale window embeddings even when nothing failed its checksum
+                # (membership changes flag windows stale without corrupting anything);
+                # the corrupt-clear path above only runs on failures.
                 windows_rebuilt = graph.recompute_stale_window_embeddings()
                 ok(f"Recomputed stale context-window embeddings: {windows_rebuilt} window rows.")
                 if windows_rebuilt:
@@ -5318,6 +5327,7 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
                     + store_health["transcript_checksum_failures"]
                     + store_health["window_checksum_failures"]
                 )
+
             legacy_rows = (
                 store_health["node_legacy_rows"]
                 + store_health["transcript_legacy_rows"]
@@ -5330,13 +5340,14 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
             emit(f"  Node model ids: {node_models or '{}'}")
             emit(f"  Stale transcript rows: {store_health['transcript_stale_rows']}")
             emit(f"  Stale node rows: {store_health['node_stale_rows']}")
+
+            store_status = "ok"
+            store_reason: str | None = None
             if store_health["mixed_models"]:
                 issues.append("Mixed embedding_model_id values detected in the store.")
                 fail("Mixed embedding model IDs detected across transcript_records/nodes.")
-                checks["graph_schema"] = {
-                    "status": "fail",
-                    "reason": "Mixed embedding_model_id values detected across transcript_records/nodes.",
-                }
+                store_status = "fail"
+                store_reason = "Mixed embedding_model_id values detected across transcript_records/nodes."
             else:
                 ok("Store model IDs are consistent.")
                 ok_items.append("Embedding store model IDs consistent")
@@ -5350,12 +5361,21 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
                     f"{store_health['window_checksum_failures']} window rows. "
                     "Run 'waggle-mcp doctor --fix' to clear and rebuild them."
                 )
+                store_status = "fail"
+                if store_reason is None:
+                    store_reason = f"{checksum_failures} embedding row(s) fail the integrity checksum (corruption)."
             elif legacy_rows:
                 emit("  No checksum failures in checksummed rows; legacy rows cannot be checksum-verified yet.")
                 warnings.append(
                     f"{legacy_rows} embedding row(s) use the legacy pre-checksum format "
                     "and cannot be checksum-verified until rewritten."
                 )
+                if store_status == "ok":
+                    store_status = "warn"
+                    store_reason = (
+                        f"{legacy_rows} embedding row(s) use the legacy pre-checksum format "
+                        "and cannot be checksum-verified until rewritten."
+                    )
             else:
                 ok("All stored embeddings pass the integrity checksum.")
                 ok_items.append("Embedding checksums verified")
@@ -5366,7 +5386,8 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
                     f"{store_health['window_legacy_rows']} window (upgraded automatically on next write)."
                 )
 
-            embedding_store_data = {
+            graph_schema_check: dict[str, Any] = {
+                "status": store_status,
                 "current_model_id": store_health["current_model_id"],
                 "transcript_model_counts": transcript_models,
                 "node_model_counts": node_models,
@@ -5379,10 +5400,10 @@ def _run_doctor(config: AppConfig, *, fix: bool = False, json_output: bool = Fal
                 "node_checksum_failures": store_health["node_checksum_failures"],
                 "window_checksum_failures": store_health["window_checksum_failures"],
                 "legacy_rows": legacy_rows,
-                "transcript_legacy_rows": store_health["transcript_legacy_rows"],
-                "node_legacy_rows": store_health["node_legacy_rows"],
-                "window_legacy_rows": store_health["window_legacy_rows"],
             }
+            if store_reason is not None:
+                graph_schema_check["reason"] = store_reason
+            checks["graph_schema"] = graph_schema_check
     except Exception as exc:
         message = f"Embedding store check failed: {type(exc).__name__}: {exc}"
         issues.append(message)
