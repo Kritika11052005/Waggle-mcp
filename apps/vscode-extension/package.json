@@ -165,6 +165,9 @@
     "compile": "node esbuild.mjs",
     "typecheck": "tsc -p ./ --noEmit",
     "test:smoke": "npm run compile && node scripts/test-platform.mjs",
+    "test:regression": "npm run compile && node scripts/test-regression.mjs",
+    "test:commands": "node scripts/validate-commands.js",
+    "test": "npm run test:commands && npm run test:smoke && npm run test:regression",
     "package": "vsce package"
   },
   "devDependencies": {

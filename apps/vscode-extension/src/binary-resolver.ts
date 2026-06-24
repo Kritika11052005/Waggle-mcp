@@ -5,6 +5,7 @@ import * as https from "https";
 import * as path from "path";
 import * as vscode from "vscode";
 import { getTrustedSetting } from "./trusted-config";
+import { shouldScanFallbackCacheVersions } from "./cache-version";
 import {
   assetFileNameForCurrentPlatform,
   buildAssetNameToPlatformKeyMap,
@@ -107,6 +108,10 @@ export class BinaryResolver {
       return requestedPath;
     } catch {
       // fall through — binary may be cached under a fallback release version
+    }
+
+    if (!shouldScanFallbackCacheVersions(getTrustedSetting<boolean>("binaryAllowLatestFallback", false))) {
+      return undefined;
     }
 
     try {

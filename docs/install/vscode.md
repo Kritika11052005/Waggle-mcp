@@ -35,11 +35,66 @@ If you prefer not to use the extension, add to `.vscode/mcp.json`:
 }
 ```
 
-With the extension’s binary install, `command` is the cached executable path under VS Code global storage.
+With the extension's binary install, `command` is the cached executable path under VS Code global storage.
 
 ## pipx fallback
 
 Set `waggle.installMethod` to `pipx` in VS Code settings if you already use `pipx install waggle-mcp`.
+
+## `waggle.mcpConfigScope`
+
+The `waggle.mcpConfigScope` setting controls which root key the extension uses when creating a new `.vscode/mcp.json`.
+
+| Value               | When to use                                                       |
+| ------------------- | ----------------------------------------------------------------- |
+| `servers` (default) | Recommended for new VS Code MCP configurations                    |
+| `mcpServers`        | Use when your tooling expects the legacy MCP configuration format |
+
+If `.vscode/mcp.json` already contains a `servers` or `mcpServers` object, the extension follows
+the existing file structure and ignores this setting.
+
+This setting is mainly used when creating a new `.vscode/mcp.json` file.
+
+## How `.vscode/mcp.json` is merged
+
+The extension does not overwrite your existing MCP configuration.
+
+When you run **Waggle: Enable for this Workspace**, it:
+
+1. Reads the existing `.vscode/mcp.json`.
+2. Preserves existing MCP servers.
+3. Adds or updates only the `waggle` entry.
+4. Writes the updated configuration back to disk.
+
+### Example
+
+Before:
+
+```json
+{
+  "servers": {
+    "github": {
+      "type": "http"
+    }
+  }
+}
+```
+
+After:
+
+```json
+{
+  "servers": {
+    "github": {
+      "type": "http"
+    },
+    "waggle": {
+      "type": "stdio"
+    }
+  }
+}
+```
+
 
 ## Verify
 

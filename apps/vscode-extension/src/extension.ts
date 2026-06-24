@@ -83,7 +83,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-export function deactivate(): void {
-  void activeServerManager?.stop();
+export async function deactivate(): Promise<void> {
+  await activeServerManager?.stop();
   activeServerManager = undefined;
 }

@@ -37,6 +37,9 @@ jobs:
       - name: Compile and test extension
         run: npm run test:smoke
 
+      - name: Run command validation
+        run: npm test
+
       - name: Package VSIX
         env:
           WAGGLE_RELEASE_REPO: Abhigyan-Shekhar/Waggle-mcp

@@ -37,6 +37,10 @@ export function registerWaggleCommands(ctx: WaggleContext, disposables: vscode.D
   };
 
   const updateStatusFromEnvironment = async (): Promise<boolean> => {
+    if (!isWorkspaceTrusted()) {
+      ctx.setStatus("restricted");
+      return false;
+    }
     try {
       const cmd = await commandPath();
       const result = await execFileAsync(cmd, ["--version"]);
@@ -73,6 +77,12 @@ export function registerWaggleCommands(ctx: WaggleContext, disposables: vscode.D
   };
 
   const runDoctorInternal = async (showSuccessMessage = true): Promise<boolean> => {
+    if (!isWorkspaceTrusted()) {
+      if (!(await requireWorkspaceTrust("run Waggle doctor"))) {
+        ctx.setStatus("restricted");
+        return false;
+      }
+    }
     showOutput();
     try {
       const cmd = await commandPath();
@@ -275,6 +285,12 @@ export function registerWaggleCommands(ctx: WaggleContext, disposables: vscode.D
   };
 
   const observeConversation = async (): Promise<void> => {
+    if (!isWorkspaceTrusted()) {
+      if (!(await requireWorkspaceTrust("observe conversation"))) {
+        ctx.setStatus("restricted");
+        return;
+      }
+    }
     const userMessage = await vscode.window.showInputBox({
       title: "Waggle: Observe Conversation",
       prompt: "User message"
@@ -323,6 +339,12 @@ export function registerWaggleCommands(ctx: WaggleContext, disposables: vscode.D
   };
 
   const exportMemory = async (): Promise<void> => {
+    if (!isWorkspaceTrusted()) {
+      if (!(await requireWorkspaceTrust("export Waggle memory"))) {
+        ctx.setStatus("restricted");
+        return;
+      }
+    }
     const folder = ctx.workspaceFolder();
     const defaultUri = folder ? vscode.Uri.file(`${folder.uri.fsPath}/waggle-export.abhi`) : undefined;
     const target = await vscode.window.showSaveDialog({
@@ -363,6 +385,12 @@ export function registerWaggleCommands(ctx: WaggleContext, disposables: vscode.D
   };
 
   const showStatus = async (): Promise<void> => {
+    if (!isWorkspaceTrusted()) {
+      ctx.setStatus("restricted");
+      showOutput();
+      ctx.append("Status: Waggle is restricted in untrusted workspaces.");
+      return;
+    }
     await updateStatusFromEnvironment();
     showOutput();
     const runtime = ctx.serverManager.runtime;

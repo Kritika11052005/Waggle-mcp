@@ -12,6 +12,7 @@ import pytest
 import waggle
 import waggle.server as server_module
 from waggle.config import AppConfig
+from waggle.errors import ValidationFailure
 from waggle.graph import MemoryGraph
 from waggle.models import NodeType, RelationType
 from waggle.server import (
@@ -20,6 +21,7 @@ from waggle.server import (
     _assert_runtime_feature_parity,
     _build_parser,
     _default_graph,
+    _hook_tools_from_args,
     _run_admin_command,
     _run_doctor,
     _run_graph_editor_command,
@@ -441,13 +443,13 @@ def test_doctor_json_output_reports_status(
     assert exit_code == 1
     assert captured.err == ""
     assert "\x1b[" not in captured.out
-    assert payload["schema_version"] == 1
-    assert payload["platform"]
-    assert payload["status"] == "issues_found"
-    assert payload["warnings"] == []
-    assert payload["fix_requested"] is False
-    assert any("No MCP client config file" in issue for issue in payload["issues"])
-    assert "Deterministic model — no download needed" in payload["successful_checks"]
+    assert payload["version"] == waggle.__version__
+    assert payload["checks"]["mcp_config"]["status"] == "fail"
+    assert "reason" in payload["checks"]["mcp_config"]
+    assert payload["checks"]["embedding_model"] == {"status": "ok", "model_id": "deterministic"}
+    assert payload["summary"]["fail"] >= 1
+    total_checks = sum(payload["summary"].values())
+    assert total_checks == len(payload["checks"])
     assert "waggle-mcp doctor" not in captured.out
 
 
@@ -493,12 +495,16 @@ def test_doctor_json_output_ok_status(
     assert exit_code == 0
     assert captured.err == ""
     assert "\x1b[" not in captured.out
-    assert payload["schema_version"] == 1
-    assert payload["status"] == "ok"
-    assert payload["issues"] == []
-    assert payload["warnings"] == []
-    assert payload["fix_requested"] is False
-    assert any(item.startswith("Waggle found in:") for item in payload["successful_checks"])
+    assert payload["version"] == waggle.__version__
+    assert payload["summary"]["fail"] == 0
+    assert payload["checks"]["mcp_config"] == {"status": "ok", "found_in": ["Codex"]}
+    assert payload["checks"]["db_connection"]["status"] == "ok"
+    assert payload["checks"]["embedding_model"] == {"status": "ok", "model_id": "deterministic"}
+    assert payload["checks"]["graph_schema"]["status"] == "ok"
+    assert payload["checks"]["startup_mode"] == {"status": "ok", "mode": "normal"}
+    assert "stdout_encoding" in payload["checks"]
+    total_checks = sum(payload["summary"].values())
+    assert total_checks == len(payload["checks"])
 
 
 def test_doctor_json_output_warning_status_for_uncached_model(
@@ -541,9 +547,109 @@ def test_doctor_json_output_warning_status_for_uncached_model(
     payload = json.loads(captured.out)
 
     assert exit_code == 0
-    assert payload["status"] == "warnings"
-    assert payload["issues"] == []
-    assert any("not found in cache" in warning for warning in payload["warnings"])
+    assert payload["summary"]["fail"] == 0
+    assert payload["summary"]["warn"] >= 1
+    embedding_model_check = payload["checks"]["embedding_model"]
+    assert embedding_model_check["status"] == "warn"
+    assert embedding_model_check["model_id"] == "sentence-transformers/not-cached-for-waggle-test"
+    assert "not found in cache" in embedding_model_check["reason"]
+
+
+def test_doctor_json_output_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    appdata = home / "AppData" / "Roaming"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    config = AppConfig(
+        backend="sqlite",
+        transport="stdio",
+        model_name="deterministic",
+        db_path=str(tmp_path / "server-memory.db"),
+        default_tenant_id="local-default",
+        http_host="127.0.0.1",
+        http_port=8080,
+        log_level="INFO",
+        rate_limit_rpm=120,
+        write_rate_limit_rpm=60,
+        max_concurrent_requests=8,
+        max_payload_bytes=1024 * 1024,
+        request_timeout_seconds=30,
+        export_dir=None,
+        neo4j_uri="",
+        neo4j_username="",
+        neo4j_password="",
+        neo4j_database="",
+    )
+
+    exit_code = _run_doctor(config, json_output=True)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert payload["checks"], "checks must not be empty"
+    recomputed_summary = {"ok": 0, "warn": 0, "fail": 0}
+    for name, check in payload["checks"].items():
+        assert check["status"] in ("ok", "warn", "fail"), f"{name} has unexpected status"
+        recomputed_summary[check["status"]] += 1
+
+    assert payload["summary"] == recomputed_summary
+
+    # No MCP config file is present, so mcp_config fails and the exit code
+    # must reflect that.
+    assert payload["summary"]["fail"] >= 1
+    assert exit_code == 1
+
+
+def test_doctor_text_output_unchanged_without_json_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    appdata = home / "AppData" / "Roaming"
+    db_path = tmp_path / "server-memory.db"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(appdata))
+    write_waggle_codex_config(home, db_path)
+
+    config = AppConfig(
+        backend="sqlite",
+        transport="stdio",
+        model_name="deterministic",
+        db_path=str(db_path),
+        default_tenant_id="local-default",
+        http_host="127.0.0.1",
+        http_port=8080,
+        log_level="INFO",
+        rate_limit_rpm=120,
+        write_rate_limit_rpm=60,
+        max_concurrent_requests=8,
+        max_payload_bytes=1024 * 1024,
+        request_timeout_seconds=30,
+        export_dir=None,
+        neo4j_uri="",
+        neo4j_username="",
+        neo4j_password="",
+        neo4j_database="",
+    )
+
+    exit_code = _run_doctor(config)
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "waggle-mcp doctor" in captured.out
+    assert "[1] MCP client config files" in captured.out
+    assert "All checks passed" in captured.out
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(captured.out)
 
 
 def test_create_and_list_api_keys_cli_redacts_hash(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -2062,3 +2168,50 @@ def test_clear_cli_commands_dry_run(tmp_path: Path, capsys: pytest.CaptureFixtur
     payload = json.loads(capsys.readouterr().out)
     assert payload["dry_run"] is True
     assert payload["deleted_nodes"] > 0
+
+
+# ── Tests for --hooks per-tool selection ─────────────────────────
+
+
+class TestHookToolsFromArgs:
+    def test_auto_selects_claude_code(self):
+        # Default behavior: 'auto' installs hooks for all hook-capable tools.
+        assert _hook_tools_from_args("auto", no_hooks=False) == ["Claude Code"]
+
+    def test_empty_defaults_to_auto(self):
+        assert _hook_tools_from_args("", no_hooks=False) == ["Claude Code"]
+
+    def test_none_selects_nothing(self):
+        assert _hook_tools_from_args("none", no_hooks=False) == []
+
+    def test_no_hooks_flag_overrides_to_none(self):
+        # --no-hooks is a deprecated alias for --hooks none and wins over auto.
+        assert _hook_tools_from_args("auto", no_hooks=True) == []
+
+    def test_explicit_claude_code(self):
+        assert _hook_tools_from_args("claude-code", no_hooks=False) == ["Claude Code"]
+
+    def test_underscore_alias(self):
+        assert _hook_tools_from_args("claude_code", no_hooks=False) == ["Claude Code"]
+
+    def test_unknown_tool_raises(self):
+        # A client that has config support but no hooks (e.g. cursor) is rejected.
+        with pytest.raises(ValidationFailure):
+            _hook_tools_from_args("cursor", no_hooks=False)
+
+    def test_dry_run_validates_hooks(self):
+        # Regression for CodeRabbit review: invalid --hooks must be caught
+        # even in dry-run mode (validation happens before the early return).
+        args = SimpleNamespace(
+            yes=True,
+            dry_run=True,
+            db="",
+            model="all-MiniLM-L6-v2",
+            clients="codex",
+            hooks="bogus",
+            no_hooks=False,
+            project_instructions=False,
+            run_doctor=False,
+        )
+        with pytest.raises(ValidationFailure):
+            _run_setup(args)

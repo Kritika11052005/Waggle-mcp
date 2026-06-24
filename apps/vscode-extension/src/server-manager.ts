@@ -5,6 +5,13 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { BinaryResolver } from "./binary-resolver";
 import { curatedSpawnEnv, spawnNotFoundMessage } from "./spawn-env";
+import {
+  canReuseManagedServer,
+  DEFAULT_HTTP_PORT,
+  isManagedChildAlive,
+  nextPortIfOccupied,
+  workspacePortStateKey
+} from "./server-port";
 
 export interface ServerRuntime {
   baseUrl: string;
@@ -53,17 +60,18 @@ export class ServerManager {
   }
 
   private async startInternal(env: Record<string, string>, cwd?: string): Promise<ServerRuntime> {
+    if (canReuseManagedServer(this.child, await this.probe(this.port))) {
+      return { baseUrl: `http://127.0.0.1:${this.port}`, port: this.port };
+    }
+
     if (this.child) {
-      if (this.child && (await this.probe(this.port))) {
-        return { baseUrl: `http://127.0.0.1:${this.port}`, port: this.port };
-      }
       await this.stop();
     }
 
     const command = await this.resolver.resolveCommandPath();
     await this.validateCommandPath(command);
 
-    this.port = this.context.globalState.get<number>("waggle.httpPort", 18765);
+    this.port = await this.allocatePort(cwd);
     const args = ["edit-graph", "--host", "127.0.0.1", "--port", String(this.port), "--no-open"];
     this.log(`Starting ${command} ${args.join(" ")}`);
 
@@ -80,10 +88,32 @@ export class ServerManager {
       throw new Error(`Waggle server did not become healthy on port ${this.port}`);
     }
 
-    await this.context.globalState.update("waggle.httpPort", this.port);
+    await this.context.workspaceState.update(workspacePortStateKey(cwd), this.port);
     const runtime = { baseUrl: `http://127.0.0.1:${this.port}`, port: this.port };
     this.onDidChangeEmitter.fire(runtime);
     return runtime;
+  }
+
+  private async allocatePort(cwd?: string): Promise<number> {
+    const stateKey = workspacePortStateKey(cwd);
+    const preferred = this.context.workspaceState.get<number>(stateKey, DEFAULT_HTTP_PORT);
+    const occupied = new Set<number>();
+
+    for (let offset = 0; offset < 20; offset++) {
+      const candidate = preferred + offset;
+      if (await this.probe(candidate)) {
+        if (isManagedChildAlive(this.child) && this.port === candidate) {
+          return candidate;
+        }
+        occupied.add(candidate);
+      }
+    }
+
+    const resolved = nextPortIfOccupied(preferred, occupied);
+    if (resolved === undefined) {
+      throw new Error(`No free port found near ${preferred} for Waggle server.`);
+    }
+    return resolved;
   }
 
   async restart(env: Record<string, string>, cwd?: string): Promise<ServerRuntime> {
@@ -197,11 +227,11 @@ export class ServerManager {
   private async waitForHealthy(port: number, child: ChildProcess, timeoutMs = 30_000): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (child.exitCode !== null && child.exitCode !== 0) {
+      if (!isManagedChildAlive(child)) {
         return false;
       }
       if (await this.probe(port)) {
-        return true;
+        return isManagedChildAlive(child);
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
