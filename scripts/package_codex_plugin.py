@@ -136,7 +136,7 @@ def _write_bundle(bundle_root: Path, output_dir: Path) -> list[Path]:
             info = ZipInfo(relative_path.as_posix())
             info.date_time = FIXED_TIMESTAMP
             info.compress_type = ZIP_DEFLATED
-            info.external_attr = (_zip_mode(path) << 16)
+            info.external_attr = _zip_mode(path) << 16
             archive.writestr(info, path.read_bytes())
 
     checksum_path = archive_path.with_suffix(f"{archive_path.suffix}.sha256")
@@ -184,8 +184,7 @@ def _validate_bundle_version(root: Path, bundle_version: str) -> list[str]:
 def _validate_written_bundle(archive_path: Path) -> None:
     if archive_path.stat().st_size > MAX_RELEASE_BUNDLE_BYTES:
         raise SystemExit(
-            f"{archive_path.name} is {archive_path.stat().st_size} bytes; "
-            f"limit is {MAX_RELEASE_BUNDLE_BYTES} bytes"
+            f"{archive_path.name} is {archive_path.stat().st_size} bytes; limit is {MAX_RELEASE_BUNDLE_BYTES} bytes"
         )
 
     failures: list[str] = []
@@ -270,6 +269,15 @@ def _sanitize_version(bundle_version: str) -> str:
 
 
 def _zip_mode(path: Path) -> int:
+    parts = path.parts
+    if "runtime" in parts:
+        runtime_index = parts.index("runtime")
+        if len(parts) > runtime_index + 2:
+            target = parts[runtime_index + 1]
+            executable = parts[runtime_index + 2]
+            if target in TARGETS and not target.startswith("win32-") and executable == TARGETS[target]:
+                return 0o755
+
     return 0o755 if path.stat().st_mode & 0o111 else 0o644
 
 

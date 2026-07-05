@@ -93,8 +93,7 @@ def test_codex_plugin_versions_match_pyproject() -> None:
     ]:
         manifest = json.loads(manifest_path.read_text())
         assert manifest["version"] == expected_version, (
-            f"{manifest_path.relative_to(ROOT)} must match pyproject.toml version "
-            f"{expected_version!r}."
+            f"{manifest_path.relative_to(ROOT)} must match pyproject.toml version {expected_version!r}."
         )
 
 

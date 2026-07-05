@@ -42,10 +42,13 @@ def test_package_release_emits_marketplace_and_plugin_archives(tmp_path: Path) -
     )
     assert "waggle-codex-marketplace-v9.9.9/INSTALL.md" in marketplace_entries
     assert all(not entry.endswith(".gitkeep") for entry in marketplace_entries)
-    assert _zip_mode(
-        output_dir / "waggle-codex-marketplace-v9.9.9.zip",
-        "plugins/waggle/runtime/linux-x86_64/waggle-server",
-    ) & 0o111
+    assert (
+        _zip_mode(
+            output_dir / "waggle-codex-marketplace-v9.9.9.zip",
+            "plugins/waggle/runtime/linux-x86_64/waggle-server",
+        )
+        & 0o111
+    )
 
     release_manifest = json.loads((output_dir / "waggle-codex-release-v9.9.9.json").read_text())
     assert release_manifest["distribution"] == "single-bundle"
@@ -70,9 +73,7 @@ def test_validate_bundle_inputs_reports_missing_runtime_binary(tmp_path: Path) -
 
 def test_validate_bundle_inputs_reports_plugin_version_drift(tmp_path: Path) -> None:
     root = _make_fake_codex_plugin_tree(tmp_path)
-    (root / "plugins" / "waggle" / ".codex-plugin" / "plugin.json").write_text(
-        '{"name":"waggle","version":"9.9.8"}'
-    )
+    (root / "plugins" / "waggle" / ".codex-plugin" / "plugin.json").write_text('{"name":"waggle","version":"9.9.8"}')
 
     failures = validate_bundle_inputs(root)
 
@@ -103,9 +104,7 @@ def _make_fake_codex_plugin_tree(root: Path) -> Path:
     (root / "pyproject.toml").write_text('[project]\nname = "waggle-mcp"\nversion = "9.9.9"\n')
     (root / ".codex-plugin" / "plugin.json").write_text('{"name":"waggle","version":"9.9.9"}')
     (root / ".mcp.json").write_text('{"mcpServers":{"waggle":{"command":"node"}}}')
-    (root / "plugins" / "waggle" / ".codex-plugin" / "plugin.json").write_text(
-        '{"name":"waggle","version":"9.9.9"}'
-    )
+    (root / "plugins" / "waggle" / ".codex-plugin" / "plugin.json").write_text('{"name":"waggle","version":"9.9.9"}')
     (root / "plugins" / "waggle" / ".mcp.json").write_text('{"mcpServers":{"waggle":{"command":"node"}}}')
     (root / "plugins" / "waggle" / "bin" / "waggle-server-launcher.js").write_text("console.log('waggle');\n")
     (root / "plugins" / "waggle" / "runtime" / "README.md").write_text("# Runtime\n")
