@@ -52,6 +52,7 @@ def test_package_release_emits_marketplace_and_plugin_archives(tmp_path: Path) -
 
     release_manifest = json.loads((output_dir / "waggle-codex-release-v9.9.9.json").read_text())
     assert release_manifest["distribution"] == "single-bundle"
+    assert release_manifest["plugin_version"] == "9.9.9"
     assert release_manifest["platform_artifact_resolution"] == "not-supported-by-current-codex-marketplace-schema"
     assert {artifact["name"] for artifact in release_manifest["artifacts"]} == {
         "waggle-codex-marketplace-v9.9.9.zip",
@@ -77,7 +78,17 @@ def test_validate_bundle_inputs_reports_plugin_version_drift(tmp_path: Path) -> 
 
     failures = validate_bundle_inputs(root)
 
-    assert any("does not match pyproject.toml version" in failure for failure in failures)
+    assert any("does not match Codex plugin version" in failure for failure in failures)
+
+
+def test_validate_bundle_inputs_reports_plugin_version_downgrade(tmp_path: Path) -> None:
+    root = _make_fake_codex_plugin_tree(tmp_path)
+    (root / ".codex-plugin" / "plugin.json").write_text('{"name":"waggle","version":"0.0.9"}')
+    (root / "plugins" / "waggle" / ".codex-plugin" / "plugin.json").write_text('{"name":"waggle","version":"0.0.9"}')
+
+    failures = validate_bundle_inputs(root)
+
+    assert any("would downgrade the published Codex plugin version" in failure for failure in failures)
 
 
 def _make_fake_codex_plugin_tree(root: Path) -> Path:

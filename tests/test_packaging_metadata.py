@@ -83,18 +83,19 @@ def test_bundled_server_info_is_versioned() -> None:
     assert WAGGLE_SERVER_INFO["runtime_scope"] == "mcp-server-stdio"
 
 
-def test_codex_plugin_versions_match_pyproject() -> None:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    expected_version = pyproject["project"]["version"]
+def test_codex_plugin_versions_match_and_do_not_regress() -> None:
+    minimum_published_plugin_version = (0, 1, 0)
+    versions = []
 
     for manifest_path in [
         ROOT / ".codex-plugin" / "plugin.json",
         ROOT / "plugins" / "waggle" / ".codex-plugin" / "plugin.json",
     ]:
         manifest = json.loads(manifest_path.read_text())
-        assert manifest["version"] == expected_version, (
-            f"{manifest_path.relative_to(ROOT)} must match pyproject.toml version {expected_version!r}."
-        )
+        versions.append(manifest["version"])
+
+    assert len(set(versions)) == 1
+    assert _version_tuple(versions[0]) >= minimum_published_plugin_version
 
 
 def _extract_toml_fence(markdown: str, *, expected_table: str) -> str:
@@ -104,6 +105,10 @@ def _extract_toml_fence(markdown: str, *, expected_table: str) -> str:
             return block
 
     raise AssertionError(f"Could not find a TOML code fence containing {expected_table!r}.")
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
 
 
 def test_codex_install_guide_matches_shipped_example_config() -> None:

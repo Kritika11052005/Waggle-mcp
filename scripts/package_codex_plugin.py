@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -34,6 +34,7 @@ PLUGIN_BUNDLE_FILES = [
 
 MAX_RELEASE_BUNDLE_BYTES = 450 * 1024 * 1024
 MARKETPLACE_DISTRIBUTION = "single-bundle"
+MIN_CODEX_PLUGIN_VERSION = "0.1.0"
 
 
 def validate_bundle_inputs(root: Path) -> list[str]:
@@ -86,7 +87,7 @@ def package_release(root: Path, output_dir: Path, bundle_version: str) -> list[P
         created_files.extend(_build_plugin_bundle(root, tmp_root, output_dir, bundle_version))
         created_files.extend(_build_marketplace_bundle(root, tmp_root, output_dir, bundle_version))
 
-    created_files.append(_write_release_manifest(output_dir, bundle_version, created_files))
+    created_files.append(_write_release_manifest(root, output_dir, bundle_version, created_files))
     return created_files
 
 
@@ -147,24 +148,36 @@ def _write_bundle(bundle_root: Path, output_dir: Path) -> list[Path]:
 
 def _validate_version_consistency(root: Path) -> list[str]:
     failures: list[str] = []
-    pyproject_path = root / "pyproject.toml"
     plugin_paths = [
         root / ".codex-plugin" / "plugin.json",
         root / PLUGIN_DIR / ".codex-plugin" / "plugin.json",
     ]
 
-    if not pyproject_path.exists():
-        return ["Missing pyproject.toml for release version validation"]
-
-    package_version = tomllib.loads(pyproject_path.read_text())["project"]["version"]
+    plugin_versions: dict[Path, str] = {}
     for plugin_path in plugin_paths:
         if not plugin_path.exists():
             continue
         plugin_version = json.loads(plugin_path.read_text()).get("version")
-        if plugin_version != package_version:
+        if not isinstance(plugin_version, str) or not plugin_version:
+            failures.append(f"{plugin_path.relative_to(root).as_posix()} is missing a plugin version")
+            continue
+        plugin_versions[plugin_path] = plugin_version
+
+    distinct_versions = set(plugin_versions.values())
+    if len(distinct_versions) > 1:
+        expected_version = next(iter(distinct_versions))
+        for plugin_path, plugin_version in plugin_versions.items():
+            if plugin_version != expected_version:
+                failures.append(
+                    f"{plugin_path.relative_to(root).as_posix()} version {plugin_version!r} "
+                    f"does not match Codex plugin version {expected_version!r}"
+                )
+
+    for plugin_path, plugin_version in plugin_versions.items():
+        if _version_tuple(plugin_version) < _version_tuple(MIN_CODEX_PLUGIN_VERSION):
             failures.append(
                 f"{plugin_path.relative_to(root).as_posix()} version {plugin_version!r} "
-                f"does not match pyproject.toml version {package_version!r}"
+                f"would downgrade the published Codex plugin version {MIN_CODEX_PLUGIN_VERSION!r}"
             )
 
     return failures
@@ -174,10 +187,10 @@ def _validate_bundle_version(root: Path, bundle_version: str) -> list[str]:
     if not bundle_version.startswith("v"):
         return []
 
-    package_version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     tag_version = bundle_version.removeprefix("v")
-    if tag_version != package_version:
-        return [f"release tag {bundle_version!r} does not match pyproject.toml version {package_version!r}"]
+    plugin_version = json.loads((root / ".codex-plugin" / "plugin.json").read_text()).get("version")
+    if isinstance(plugin_version, str) and _version_tuple(tag_version) < _version_tuple(plugin_version):
+        return [f"release tag {bundle_version!r} is older than Codex plugin version {plugin_version!r}"]
     return []
 
 
@@ -206,7 +219,7 @@ def _validate_written_bundle(archive_path: Path) -> None:
         raise SystemExit(_format_failures(failures))
 
 
-def _write_release_manifest(output_dir: Path, bundle_version: str, files: list[Path]) -> Path:
+def _write_release_manifest(root: Path, output_dir: Path, bundle_version: str, files: list[Path]) -> Path:
     artifact_entries = []
     for path in files:
         artifact_entries.append(
@@ -223,6 +236,7 @@ def _write_release_manifest(output_dir: Path, bundle_version: str, files: list[P
             {
                 "name": "waggle",
                 "version": bundle_version,
+                "plugin_version": json.loads((root / ".codex-plugin" / "plugin.json").read_text()).get("version"),
                 "distribution": MARKETPLACE_DISTRIBUTION,
                 "platform_artifact_resolution": "not-supported-by-current-codex-marketplace-schema",
                 "artifacts": artifact_entries,
@@ -266,6 +280,13 @@ def _bundle_name(kind: str, bundle_version: str) -> str:
 
 def _sanitize_version(bundle_version: str) -> str:
     return bundle_version.replace("/", "-").replace("\\", "-").replace(" ", "-")
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    match = re.match(r"^(\d+(?:\.\d+)*)(?:[-+].*)?$", version)
+    if not match:
+        return (0,)
+    return tuple(int(part) for part in match.group(1).split("."))
 
 
 def _zip_mode(path: Path) -> int:
