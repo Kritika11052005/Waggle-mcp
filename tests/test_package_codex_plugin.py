@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
+
 from scripts.build_codex_plugin_runtime import TARGETS
 from scripts.package_codex_plugin import package_release, validate_bundle_inputs
 
@@ -70,6 +72,16 @@ def test_validate_bundle_inputs_reports_missing_runtime_binary(tmp_path: Path) -
     failures = validate_bundle_inputs(root)
 
     assert any("linux-x86_64/waggle-server" in failure for failure in failures)
+
+
+def test_package_release_reports_missing_root_manifest_cleanly(tmp_path: Path) -> None:
+    root = _make_fake_codex_plugin_tree(tmp_path)
+    (root / ".codex-plugin" / "plugin.json").unlink()
+
+    with pytest.raises(SystemExit) as exc_info:
+        package_release(root, tmp_path / "dist", "v9.9.9")
+
+    assert "Missing required bundle file: .codex-plugin/plugin.json" in str(exc_info.value)
 
 
 def test_validate_bundle_inputs_reports_plugin_version_drift(tmp_path: Path) -> None:

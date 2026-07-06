@@ -10,7 +10,6 @@ Release artifacts are copied into target directories:
 ```text
 plugins/waggle/runtime/
   darwin-arm64/waggle-server
-  darwin-arm64/_internal/...
   darwin-x86_64/waggle-server
   linux-x86_64/waggle-server
   linux-aarch64/waggle-server
@@ -26,9 +25,9 @@ environment, and executes the matching bundled binary. It does not fall back to
 
 Build each artifact on a native runner. PyInstaller is the default packager
 because it produces Python-free executables and avoids cross-compilation.
-Waggle uses PyInstaller `--onedir` mode for the Codex plugin runtime because
-local `--onefile` probes exceeded the 3-second cold-start budget due to archive
-extraction.
+Waggle uses PyInstaller `--onefile` mode for the Codex plugin runtime. The
+startup probe budget is 10 seconds to accommodate onefile archive extraction on
+first launch.
 
 ```bash
 python -m pip install . pyinstaller
@@ -74,7 +73,7 @@ Validation enforces:
 - all five target binaries are present
 - each target runtime directory is no larger than 80 MB
 - Unix runtimes keep executable permissions after packaging
-- `--server-info` starts within 3 seconds and emits compatibility metadata when
+- `--server-info` starts within 10 seconds and emits compatibility metadata when
   `--probe` is run on a native runner
 - macOS binaries pass `codesign --verify` when `--verify-signatures` is run on
   macOS

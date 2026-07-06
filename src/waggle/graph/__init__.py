@@ -662,7 +662,7 @@ class MemoryGraph(TranscriptMixin, TraversalMixin, MutationMixin, MemoryGraphBas
 
         db_uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
         try:
-            with sqlite3.connect(db_uri, uri=True) as connection:
+            with contextlib.closing(sqlite3.connect(db_uri, uri=True)) as connection:
                 result = connection.execute("PRAGMA integrity_check").fetchone()
         except sqlite3.DatabaseError as exc:
             raise ValidationFailure(

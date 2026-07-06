@@ -75,6 +75,9 @@ def validate_bundle_inputs(root: Path) -> list[str]:
 
 def package_release(root: Path, output_dir: Path, bundle_version: str) -> list[Path]:
     failures = validate_bundle_inputs(root)
+    if failures:
+        raise SystemExit(_format_failures(failures))
+
     failures.extend(_validate_bundle_version(root, bundle_version))
     if failures:
         raise SystemExit(_format_failures(failures))
@@ -188,7 +191,11 @@ def _validate_bundle_version(root: Path, bundle_version: str) -> list[str]:
         return []
 
     tag_version = bundle_version.removeprefix("v")
-    plugin_version = json.loads((root / ".codex-plugin" / "plugin.json").read_text()).get("version")
+    plugin_json_path = root / ".codex-plugin" / "plugin.json"
+    if not plugin_json_path.exists():
+        return []
+
+    plugin_version = json.loads(plugin_json_path.read_text()).get("version")
     if isinstance(plugin_version, str) and _version_tuple(tag_version) < _version_tuple(plugin_version):
         return [f"release tag {bundle_version!r} is older than Codex plugin version {plugin_version!r}"]
     return []
