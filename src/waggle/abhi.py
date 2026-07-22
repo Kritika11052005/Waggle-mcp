@@ -562,7 +562,7 @@ def build_abhi_document(
         if include_deps:
             included_ids = {str(n["id"]) for n in nodes if n.get("id")}
             snapshot_nodes_by_id = {str(n["id"]): n for n in snapshot.get("nodes", []) if n.get("id")}
-            
+
             to_add = []
             for edge in edges:
                 edge_id = str(edge.get("id", ""))
@@ -577,7 +577,7 @@ def build_abhi_document(
                         if target in snapshot_nodes_by_id:
                             to_add.append(snapshot_nodes_by_id[target])
                             included_ids.add(target)
-            
+
             if to_add:
                 normalized_to_add = [
                     _normalize_node(item, redact_patterns=redact_patterns, include_embeddings=include_embeddings)
@@ -585,16 +585,16 @@ def build_abhi_document(
                 ]
                 nodes.extend(normalized_to_add)
                 nodes = _sorted_records(nodes, "id", "source_turn_pair_id", "updated_at")
-                
+
                 document["nodes"] = nodes
                 manifest["counts"]["nodes"] = len(nodes)
-                
+
                 final_window_ids = {
                     str(node.get("context_window_id", "")).strip()
                     for node in nodes
                     if str(node.get("context_window_id", "")).strip()
                 }
-                
+
                 context_windows = _sorted_records(
                     [
                         _normalize_window(item)
@@ -606,7 +606,7 @@ def build_abhi_document(
                 )
                 document["context_windows"] = context_windows
                 manifest["counts"]["context_windows"] = len(context_windows)
-                
+
                 context_window_edges = _sorted_records(
                     [
                         item
@@ -621,9 +621,9 @@ def build_abhi_document(
                 )
                 document["context_window_edges"] = context_window_edges
                 manifest["context_window_edges"] = context_window_edges
-                
+
                 manifest["content_hash"] = _hash_with_prefix(compute_abhi_hash(document))
-            
+
             dangling_export = _find_dangling_edges(document)
 
         if dangling_export:

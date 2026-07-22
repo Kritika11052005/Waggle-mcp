@@ -804,7 +804,7 @@ def test_scoped_export_include_deps_resolves():
 
     # Exporting project-a with include_deps=True should resolve n2 and win2
     doc = build_abhi_document(snapshot, scope="project", project="project-a", include_deps=True)
-    
+
     node_ids = {n["id"] for n in doc["nodes"]}
     assert n1["id"] in node_ids
     assert n2["id"] in node_ids  # Should be resolved as a dependency!
@@ -826,7 +826,7 @@ def test_scoped_export_without_flags_ignores_cross_project_edges():
     snapshot = _make_snapshot(nodes=[n1, n2], edges=[edge])
 
     doc = build_abhi_document(snapshot, scope="project", project="project-a")
-    
+
     node_ids = {n["id"] for n in doc["nodes"]}
     assert n1["id"] in node_ids
     assert n2["id"] not in node_ids
@@ -861,20 +861,19 @@ def test_scoped_export_context_window_edges_written_consistently():
 
     # Exporting project-a with include_deps=True should resolve n2 and win2, and update context_window_edges.
     doc = build_abhi_document(snapshot, scope="project", project="project-a", include_deps=True)
-    
+
     # Check consistency
     doc_edges = doc.get("context_window_edges", [])
     manifest_edges = doc.get("manifest", {}).get("context_window_edges", [])
-    
+
     assert len(doc_edges) == 1
     assert doc_edges[0]["id"] == "we-1"
     assert doc_edges == manifest_edges
 
     # Check hash matches
     from waggle.abhi import compute_abhi_hash
+
     computed_hash = compute_abhi_hash(doc)
     content_hash = doc.get("manifest", {}).get("content_hash", "")
     assert content_hash.startswith("sha256:")
     assert content_hash == f"sha256:{computed_hash}"
-
-
